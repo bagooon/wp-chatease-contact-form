@@ -1,10 +1,8 @@
 name: Build WP Plugin ZIP
 
 on:
-  push:
-    tags:
-      - 'v*'          # v0.1.0 などのタグ push で実行
-  workflow_dispatch:   # 手動実行も可能
+  release:
+    types: [published]  # リリースが「公開」されたタイミングで実行
 
 jobs:
   build-zip:
@@ -23,15 +21,21 @@ jobs:
       - name: Install Node dependencies
         run: npm install
 
-      # もし vendor/ をコミットしていないなら、このあたりで composer install も必要
-      # 今回は「vendor もコミットする」想定なので省略
-
       - name: Build plugin ZIP
         run: npm run build:zip
 
+      # （オプション）Artifactsにも残したいならこのまま残してOK
       - name: Upload ZIP artifact
         uses: actions/upload-artifact@v4
         with:
           name: chatease-contact-form-zip
           path: dist/chatease-contact-form.zip
           if-no-files-found: error
+
+      # ★ 追加：Release Assets に ZIP を添付
+      - name: Attach ZIP to GitHub Release
+        uses: softprops/action-gh-release@v2
+        with:
+          files: dist/chatease-contact-form.zip
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
