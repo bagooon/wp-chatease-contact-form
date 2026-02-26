@@ -1,0 +1,5 @@
+# Exclude tests from Packagist dist
+/tests export-ignore
+/phpunit.xml.dist export-ignore
+/phpstan.neon.dist export-ignore
+/.github export-ignore

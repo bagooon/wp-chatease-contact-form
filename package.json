@@ -1,0 +1,16 @@
+{
+  "name": "wp_plugin",
+  "version": "1.0.0",
+  "description": "",
+  "main": "index.js",
+  "scripts": {
+    "build:zip": "node scripts/build-plugin-zip.mjs"
+  },
+  "keywords": [],
+  "author": "",
+  "license": "ISC",
+  "dependencies": {
+    "archiver": "^7.0.1",
+    "fs-extra": "^11.3.3"
+  }
+}

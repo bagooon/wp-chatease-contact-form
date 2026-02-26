@@ -1,0 +1,5 @@
+{
+    "require": {
+        "bagooon/chatease-php-client": "^0.1.0"
+    }
+}
