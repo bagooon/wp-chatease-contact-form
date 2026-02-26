@@ -4,6 +4,9 @@ on:
   release:
     types: [published]  # リリースが「公開」されたタイミングで実行
 
+permissions:
+  contents: write
+
 jobs:
   build-zip:
     runs-on: ubuntu-latest
