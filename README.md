@@ -1,3 +1,5 @@
+<a href="https://chatease.jp/"><img width="500" height="106" alt="ChatEase logo" src="./.github/assets/chatease_logo.svg" /></a>
+
 # ChatEase Contact Form for WordPress
 
 ChatEase のチャットボードと連携できる、WordPress 用お問い合わせフォームプラグインです。
