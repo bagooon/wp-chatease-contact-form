@@ -26,10 +26,11 @@ async function main() {
   // ビルド用ディレクトリ作成
   await fsExtra.ensureDir(buildDir)
 
-  // src の中身を buildDir にコピー
-  // src 配下のファイル・ディレクトリが、そのまま PLUGIN_SLUG/ 配下に入る
+  // src の中身を buildDir にコピー（開発用ファイルは除外）
   await fsExtra.copy(srcDir, buildDir, {
     filter: (src) => {
+      const rel = path.relative(srcDir, src)
+      // src 直下からの相対パスで判定
       const excluded = [
         'composer.json',
         'composer.lock',
@@ -39,9 +40,12 @@ async function main() {
         '.git',
         '.github',
         'tests',
+        'phpstan.neon',
+        'phpunit.xml',
       ]
 
-      return !excluded.some((name) => src.includes(name))
+      // ルートからの相対パスの先頭が excluded と一致したら除外
+      return !excluded.some((name) => rel === name || rel.startsWith(`${name}${path.sep}`))
     },
   })
 

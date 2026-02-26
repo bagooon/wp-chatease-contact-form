@@ -494,10 +494,20 @@ function chatease_send_to_chatease(array $values, int $form_post_id = 0): string
     $now->modify('+' . $days . ' day');
     $timeLimit = $now->format('Y-m-d');
 
+    // 名前 = 「会社名 + 名前」/ 会社名が入力されていない場合は「名前のみ」にする
+    if ($values['company'] !== '') {
+        $guestName = $values['company'] . ' ' . $values['name'];
+    } else {
+        $guestName = $values['name'];
+    }
+
+    // 初回投稿内容は「問い合わせ内容のみ」
+    $initialContent = $values['message'];
+
     $client->createBoardWithStatusAndMessage([
       'title' => 'Webフォームからのお問い合わせ',
       'guest' => [
-        'name'  => $values['name'],
+        'name'  => $guestName,
         'email' => $values['email'],
       ],
       'boardUniqueKey' => $uniqueKey,
@@ -506,7 +516,7 @@ function chatease_send_to_chatease(array $values, int $form_post_id = 0): string
         'timeLimit' => $timeLimit,
       ],
       'initialGuestComment' => [
-        'content' => chatease_build_initial_message($values),
+        'content' => $initialContent,
       ],
     ]);
   } catch (\Throwable $e) {
@@ -537,26 +547,6 @@ function chatease_send_notify_email(array $values, int $form_post_id = 0): void
   $headers = ['Content-Type: text/plain; charset=UTF-8'];
 
   wp_mail($to, $subject, $body, $headers);
-}
-
-/**
- * 初期投稿用メッセージを組み立てる例（必要ならコメントアウトを外して利用）
- *
- * @param array{company:string,name:string,email:string,message:string} $values
- * @return string
- */
-function chatease_build_initial_message(array $values): string
-{
-  $lines = [];
-  if ($values['company'] !== '') {
-    $lines[] = '会社名: ' . $values['company'];
-  }
-  $lines[] = 'お名前: ' . $values['name'];
-  $lines[] = 'メールアドレス: ' . $values['email'];
-  $lines[] = '---';
-  $lines[] = $values['message'];
-
-  return implode("\n", $lines);
 }
 
 add_action('add_meta_boxes', function () {

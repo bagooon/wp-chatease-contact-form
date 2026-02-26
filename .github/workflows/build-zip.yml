@@ -1,0 +1,37 @@
+name: Build WP Plugin ZIP
+
+on:
+  push:
+    tags:
+      - 'v*'          # v0.1.0 などのタグ push で実行
+  workflow_dispatch:   # 手動実行も可能
+
+jobs:
+  build-zip:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+          cache: 'npm'
+
+      - name: Install Node dependencies
+        run: npm install
+
+      # もし vendor/ をコミットしていないなら、このあたりで composer install も必要
+      # 今回は「vendor もコミットする」想定なので省略
+
+      - name: Build plugin ZIP
+        run: npm run build:zip
+
+      - name: Upload ZIP artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: chatease-contact-form-zip
+          path: dist/chatease-contact-form.zip
+          if-no-files-found: error
