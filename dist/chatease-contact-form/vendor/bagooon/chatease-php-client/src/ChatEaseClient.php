@@ -43,6 +43,74 @@ class ChatEaseClient
     }
 
     /**
+     * ワークスペース名を取得する
+     *
+     * POST /api/v1/board/name
+     * Header:  X-Chatease-API-Token: {apiToken}
+     * Body:    { "workspaceSlug": "xxx" }
+     *
+     * 正常: { "name": "ワークスペース名" }
+     * 401:  Unauthorized
+     *
+     * @throws \RuntimeException
+     */
+    public function getWorkspaceName(): string
+    {
+        $url     = $this->baseUrl . '/api/v1/board/name';
+        $payload = json_encode(
+            ['workspaceSlug' => $this->workspaceSlug],
+            JSON_THROW_ON_ERROR
+        );
+
+        $ch = curl_init($url);
+        if ($ch === false) {
+            throw new \RuntimeException('Failed to initialize cURL.');
+        }
+
+        curl_setopt_array($ch, [
+            CURLOPT_RETURNTRANSFER => true,
+            CURLOPT_POST           => true,
+            CURLOPT_HTTPHEADER     => [
+                'Content-Type: application/json',
+                'X-Chatease-API-Token: ' . $this->apiToken,
+            ],
+            CURLOPT_POSTFIELDS     => $payload,
+            CURLOPT_TIMEOUT        => 10,
+        ]);
+
+        $body = curl_exec($ch);
+
+        if ($body === false) {
+            $err = curl_error($ch);
+            throw new \RuntimeException('cURL error: ' . $err);
+        }
+
+        // PHPStan 対策：ここで string に絞る
+        if (!is_string($body)) {
+            throw new \RuntimeException('Unexpected cURL response type.');
+        }
+
+        $status = curl_getinfo($ch, CURLINFO_HTTP_CODE);
+
+        if ($status === 401) {
+            throw new \RuntimeException('Unauthorized (401): APIトークンまたはWorkspace Slugが不正です。');
+        }
+
+        if ($status < 200 || $status >= 300) {
+            throw new \RuntimeException('Unexpected status code: ' . $status);
+        }
+
+        $data = json_decode($body, true, 512, JSON_THROW_ON_ERROR);
+
+        if (!is_array($data) || !isset($data['name']) || !is_string($data['name'])) {
+            throw new \RuntimeException('Invalid response format: "name" が取得できません。');
+        }
+
+        return $data['name'];
+    }
+
+
+    /**
      * ① チャットボードのみ生成
      *
      * @param array{

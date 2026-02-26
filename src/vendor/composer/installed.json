@@ -2,17 +2,17 @@
     "packages": [
         {
             "name": "bagooon/chatease-php-client",
-            "version": "v0.1.0",
-            "version_normalized": "0.1.0.0",
+            "version": "v0.1.1",
+            "version_normalized": "0.1.1.0",
             "source": {
                 "type": "git",
                 "url": "https://github.com/bagooon/chatease-php-client.git",
-                "reference": "abcf4d242a57880426208cc8cfe689763711ee65"
+                "reference": "a3099060d1d04eb2fc02318491dd15b884b4c7ce"
             },
             "dist": {
                 "type": "zip",
-                "url": "https://api.github.com/repos/bagooon/chatease-php-client/zipball/abcf4d242a57880426208cc8cfe689763711ee65",
-                "reference": "abcf4d242a57880426208cc8cfe689763711ee65",
+                "url": "https://api.github.com/repos/bagooon/chatease-php-client/zipball/a3099060d1d04eb2fc02318491dd15b884b4c7ce",
+                "reference": "a3099060d1d04eb2fc02318491dd15b884b4c7ce",
                 "shasum": ""
             },
             "require": {
@@ -24,7 +24,7 @@
                 "phpstan/phpstan": "^2.1",
                 "phpunit/phpunit": "^10.5.63"
             },
-            "time": "2026-02-26T07:23:17+00:00",
+            "time": "2026-02-26T18:22:50+00:00",
             "type": "library",
             "installation-source": "dist",
             "autoload": {
@@ -39,7 +39,7 @@
             "description": "PHP client for ChatEase board API (server-side only)",
             "support": {
                 "issues": "https://github.com/bagooon/chatease-php-client/issues",
-                "source": "https://github.com/bagooon/chatease-php-client/tree/v0.1.0"
+                "source": "https://github.com/bagooon/chatease-php-client/tree/v0.1.1"
             },
             "install-path": "../bagooon/chatease-php-client"
         }

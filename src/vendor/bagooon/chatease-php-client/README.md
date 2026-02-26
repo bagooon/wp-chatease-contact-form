@@ -2,7 +2,7 @@
 
 # bagooon/chatease-php-client
 
-[![CI](https://github.com/yourname/chatease-php-client/actions/workflows/php-ci.yml/badge.svg)](...)
+[![CI](https://github.com/bagooon/chatease-php-client/actions/workflows/php-ci.yml/badge.svg)](...)
 [![Latest Version](https://img.shields.io/packagist/v/bagooon/chatease-php-client.svg)](...)
 [![PHP Version](https://img.shields.io/packagist/php-v/bagooon/chatease-php-client.svg)](...)
 
@@ -82,6 +82,10 @@ $res3 = $client->createBoardWithStatusAndMessage([
         'content' => 'ロゴデザインについて相談したいです。',
     ],
 ]);
+
+// 4) ワークスペース名を取得する
+$name = $client->getWorkspaceName();
+
 ```
 
 ---
@@ -154,6 +158,23 @@ $res3 = $client->createBoardWithStatusAndMessage([
   'content' => string,
 ],
 ```
+
+---
+
+### `getWorkspaceName(): string`
+
+ワークスペースの表示名を取得します。  
+APIトークン＋ワークスペーススラッグが正しく設定されているかを確認する用途に利用できます。
+
+戻り値： ワークスペース名
+
+例外：
+
+- `RuntimeException`
+    - 401（APIトークンまたはWorkspace Slugが不正）
+    - HTTP ステータス異常
+    - JSON デコードエラー
+    - レスポンス形式不正
 
 ---
 

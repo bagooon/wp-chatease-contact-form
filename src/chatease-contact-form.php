@@ -3,7 +3,7 @@
 Plugin Name: ChatEase Contact Form
 Description: ChatEase 連携用の確認画面付き問い合わせフォーム（reCAPTCHA v2 対応・セッション方式）
 Version: 0.1.0
-Author: Your Name
+Author: Hashimoto Giken
 */
 
 if (!defined('ABSPATH')) {
@@ -21,6 +21,10 @@ use Bagooon\ChatEase\ChatEaseClient;
  * フロント側でセッションを開始
  */
 add_action('init', function () {
+  if (session_status() === PHP_SESSION_NONE) {
+    session_start();
+  }
+
   $labels = [
     'name'               => 'ChatEase フォーム',
     'singular_name'      => 'ChatEase フォーム',
@@ -49,12 +53,22 @@ add_action('init', function () {
   ];
 
   register_post_type('chatease_form', $args);
+});
 
-  if (!is_admin() && php_sapi_name() !== 'cli') {
-    if (session_status() === PHP_SESSION_NONE) {
-      session_start();
+add_action('admin_enqueue_scripts', function () {
+  wp_add_inline_style(
+    'wp-admin',
+    '
+    .chatease-status-ok {
+      color: #1d7a1d !important;
+      font-weight: 600;
     }
-  }
+    .chatease-status-error {
+      color: #b32d2e !important;
+      font-weight: 600;
+    }
+    '
+  );
 });
 
 /**
@@ -83,6 +97,16 @@ add_action('admin_init', function () {
   register_setting('chatease_contact_form', 'chatease_recaptcha_secret_key');
   register_setting('chatease_contact_form', 'chatease_notify_email');
   register_setting('chatease_contact_form', 'chatease_response_deadline_days');
+  register_setting('chatease_contact_form', 'chatease_workspace_name');
+
+  // 設定保存後にワークスペース名チェック
+  if (
+    isset($_GET['page']) &&
+    $_GET['page'] === 'chatease_root' &&
+    !empty($_GET['settings-updated'])
+  ) {
+    chatease_validate_workspace_settings();
+  }
 });
 
 /**
@@ -111,6 +135,109 @@ add_action('admin_menu', function () {
   );
 });
 
+add_action('add_meta_boxes', function () {
+  add_meta_box(
+    'chatease_form_labels',
+    'フォームラベル設定',
+    'chatease_render_form_labels_metabox',
+    'chatease_form',
+    'normal',
+    'default'
+  );
+});
+
+add_action('save_post_chatease_form', function ($post_id) {
+  if (
+    !isset($_POST['_chatease_form_labels_nonce']) ||
+    !wp_verify_nonce($_POST['_chatease_form_labels_nonce'], 'chatease_form_labels')
+  ) {
+    return;
+  }
+
+  if (defined('DOING_AUTOSAVE') && DOING_AUTOSAVE) {
+    return;
+  }
+
+  if (!current_user_can('edit_post', $post_id)) {
+    return;
+  }
+
+  $fields = [
+    'chatease_label_company'      => '_chatease_label_company',
+    'chatease_label_name'         => '_chatease_label_name',
+    'chatease_label_email'        => '_chatease_label_email',
+    'chatease_label_message'      => '_chatease_label_message',
+    'chatease_deadline_days'      => '_chatease_deadline_days',
+    'chatease_form_notify_email'  => '_chatease_notify_email',
+    'chatease_form_api_token'     => '_chatease_api_token',
+    'chatease_form_workspace_slug' => '_chatease_workspace_slug',
+  ];
+
+  foreach ($fields as $input => $meta_key) {
+    if (isset($_POST[$input])) {
+      $value = sanitize_text_field(wp_unslash($_POST[$input]));
+      update_post_meta($post_id, $meta_key, $value);
+    }
+  }
+
+  // フォーム専用のワークスペース設定を検証
+  chatease_validate_form_workspace_settings($post_id);
+});
+
+/**
+ * chatease_form 編集画面で、フォーム専用ワークスペースのエラー／成功メッセージを表示
+ */
+add_action('admin_notices', function () {
+  global $pagenow, $post;
+
+  if ($pagenow !== 'post.php') {
+    return;
+  }
+
+  if (!isset($post) || $post->post_type !== 'chatease_form') {
+    return;
+  }
+
+  $post_id = $post->ID;
+
+  $error  = get_transient('chatease_form_workspace_error_' . $post_id);
+  $notice = get_transient('chatease_form_workspace_notice_' . $post_id);
+
+  if ($error) {
+    echo '<div class="notice notice-error is-dismissible"><p>' . esc_html($error) . '</p></div>';
+    delete_transient('chatease_form_workspace_error_' . $post_id);
+  }
+
+  if ($notice) {
+    echo '<div class="notice notice-success is-dismissible"><p>' . esc_html($notice) . '</p></div>';
+    delete_transient('chatease_form_workspace_notice_' . $post_id);
+  }
+});
+
+// カスタムカラムにショートコードの中身を表示
+add_action('manage_chatease_form_posts_custom_column', function (string $column, int $post_id): void {
+  if ($column !== 'chatease_shortcode') {
+    return;
+  }
+
+  $shortcode = sprintf(
+    '[chatease_contact_form id="%d"]',
+    $post_id
+  );
+
+  echo '<code>' . esc_html($shortcode) . '</code>';
+}, 10, 2);
+
+// フォーム一覧（chatease_form）のカラムに「ショートコード」を追加
+add_filter('manage_edit-chatease_form_columns', function (array $columns): array {
+  return [
+    'cb'                  => $columns['cb'] ?? '',   // チェックボックス
+    'title'               => 'フォーム名',
+    'chatease_shortcode'  => 'ショートコード',
+    'date'                => '作成日',
+  ];
+});
+
 /**
  * 設定画面の描画
  */
@@ -120,9 +247,15 @@ function chatease_render_settings_page()
     return;
   }
 
+  $workspace_name = get_option('chatease_workspace_name', '');
+
 ?>
   <div class="wrap">
     <h1>ChatEase Contact Form 設定</h1>
+    <?php
+    // ▼ 設定保存時のエラー／成功メッセージ表示
+    settings_errors();
+    ?>
     <form method="post" action="options.php">
       <?php settings_fields('chatease_contact_form'); ?>
       <?php do_settings_sections('chatease_contact_form'); ?>
@@ -142,6 +275,25 @@ function chatease_render_settings_page()
             <input type="text" id="chatease_workspace_slug" name="chatease_workspace_slug"
               value="<?php echo esc_attr(get_option('chatease_workspace_slug', '')); ?>"
               class="regular-text" />
+          </td>
+        </tr>
+        <tr>
+          <th scope="row">ワークスペース名</th>
+          <td>
+            <input type="text"
+              readonly
+              class="regular-text"
+              value="<?php echo esc_attr($workspace_name); ?>" />
+            <?php if ($workspace_name !== '') : ?>
+            <p class="description chatease-status-ok">
+              ワークスペースとの紐付けが完了しています。
+            </p>
+            <?php else : ?>
+            <p class="description chatease-status-error">
+              ワークスペースとの紐付けが完了していません。<br>
+              API トークン と ワークスペーススラッグ を入力して「保存」ボタンを押してください。
+            </p>
+            <?php endif; ?>
           </td>
         </tr>
         <tr>
@@ -208,12 +360,18 @@ function chatease_render_contact_form($atts)
 
   $form_post_id = $atts['id'] !== '' ? (int)$atts['id'] : 0;
 
-  // ラベル設定を取得
-  $labels = chatease_get_form_labels($form_post_id);
+  // POST のときは hidden から上書き（ショートコードとズレないように）
+  if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['chatease_form_post_id'])) {
+    $posted_id = (int) $_POST['chatease_form_post_id'];
+    if ($posted_id > 0) {
+      $form_post_id = $posted_id;
+    }
+  }
 
   $form_id = $form_post_id > 0 ? 'form_' . $form_post_id : 'default';
   $session_key = 'chatease_form_' . $form_id;
 
+  $labels = chatease_get_form_labels($form_post_id);
 
   // セッションから前回値を取得
   $stored = $_SESSION[$session_key] ?? [
@@ -234,10 +392,10 @@ function chatease_render_contact_form($atts)
     } else {
       if ($step === 'confirm') {
         // 入力値の取得・バリデーション
-        $stored['company'] = isset($_POST['company']) ? chatease_sanitize_text($_POST['company']) : '';
-        $stored['name']    = isset($_POST['name']) ? chatease_sanitize_text($_POST['name']) : '';
-        $stored['email']   = isset($_POST['email']) ? sanitize_email(wp_unslash($_POST['email'])) : '';
-        $stored['message'] = isset($_POST['message']) ? chatease_sanitize_textarea($_POST['message']) : '';
+        $stored['company'] = isset($_POST['cf_company']) ? chatease_sanitize_text($_POST['cf_company']) : '';
+        $stored['name']    = isset($_POST['cf_name']) ? chatease_sanitize_text($_POST['cf_name']) : '';
+        $stored['email']   = isset($_POST['cf_email']) ? sanitize_email(wp_unslash($_POST['cf_email'])) : '';
+        $stored['message'] = isset($_POST['cf_message']) ? chatease_sanitize_textarea($_POST['cf_message']) : '';
 
         // reCAPTCHA 検証
         $recaptcha_ok = chatease_verify_recaptcha();
@@ -318,42 +476,79 @@ function chatease_render_input_form(string $form_id, array $values, array $label
 {
   $site_key = get_option('chatease_recaptcha_site_key', '');
 
+  // form_id から chatease_form の投稿IDを推定
+  $form_post_id = 0;
+  if (strpos($form_id, 'form_') === 0) {
+    $form_post_id = (int) substr($form_id, strlen('form_'));
+  }
+
+  // フォーム専用 → なければグローバル の順でワークスペース名を取得
+  $creds = chatease_get_api_credentials($form_post_id);
+  $workspace_name = trim((string) $creds['workspace_name']);
+
 ?>
+  <?php if ($workspace_name !== ''): ?>
+    <div class="chatease-intro">
+      <p>
+        個別にチャットにてご返答させていただきます。準備が整いましたらチャットボードへのアクセス方法をメールにてお知らせいたします。<br />
+        メールの件名は 『 チャットボード通知【 <?php echo esc_html($workspace_name); ?> 】 』です。
+      </p>
+    </div>
+  <?php else: ?>
+    <div class="chatease-intro">
+      <p>
+        個別にチャットにてご返答させていただきます。準備が整いましたらチャットボードへのアクセス方法をメールにてお知らせいたします。
+      </p>
+    </div>
+  <?php endif; ?>
+
   <form method="post" class="chatease-contact-form">
     <?php wp_nonce_field('chatease_contact_form_' . $form_id, '_chatease_nonce'); ?>
     <input type="hidden" name="chatease_step" value="confirm" />
 
-    <p>
-      <label><?php echo esc_html($labels['company']); ?><br>
-        <input type="text" name="company" value="<?php echo esc_attr($values['company']); ?>" />
-      </label>
-    </p>
+    <div class="chatease-field chatease-field--company">
+      <div class="chatease-field__label">
+        <label for="cf_company"><?php echo esc_html($labels['company']); ?></label>
+      </div>
+      <div class="chatease-field__input">
+        <input id="cf_company" type="text" name="cf_company" value="<?php echo esc_attr($values['company']); ?>" />
+      </div>
+    </div>
 
-    <p>
-      <label><?php echo esc_html($labels['name']); ?><br>
-        <input type="text" name="name" value="<?php echo esc_attr($values['name']); ?>" required />
-      </label>
-    </p>
+    <div class="chatease-field chatease-field--name">
+      <div class="chatease-field__label">
+        <label for="cf_name"><?php echo esc_html($labels['name']); ?>（必須）</label>
+      </div>
+      <div class="chatease-field__input">
+        <input id="cf_name" type="text" name="cf_name" value="<?php echo esc_attr($values['name']); ?>" required />
+      </div>
+    </div>
 
-    <p>
-      <label><?php echo esc_html($labels['email']); ?><br>
-        <input type="email" name="email" value="<?php echo esc_attr($values['email']); ?>" required />
-      </label>
-    </p>
+    <div class="chatease-field chatease-field--email">
+      <div class="chatease-field__label">
+        <label for="cf_email"><?php echo esc_html($labels['email']); ?>（必須）</label>
+      </div>
+      <div class="chatease-field__input">
+        <input id="cf_email" type="email" name="cf_email" value="<?php echo esc_attr($values['email']); ?>" required />
+      </div>
+    </div>
 
-    <p>
-      <label><?php echo esc_html($labels['message']); ?><br>
-        <textarea name="message" rows="5" required><?php echo esc_textarea($values['message']); ?></textarea>
-      </label>
-    </p>
+    <div class="chatease-field chatease-field--message">
+      <div class="chatease-field__label">
+        <label for="cf_message"><?php echo esc_html($labels['message']); ?>（必須）</label>
+      </div>
+      <div class="chatease-field__input">
+        <textarea id="cf_message" name="cf_message" rows="5" required><?php echo esc_textarea($values['message']); ?></textarea>
+      </div>
+    </div>
 
     <?php if ($site_key !== ''): ?>
       <div class="g-recaptcha" data-sitekey="<?php echo esc_attr($site_key); ?>"></div>
     <?php endif; ?>
 
-    <p>
+    <div class="chatease-form-buttons">
       <button type="submit">確認画面へ</button>
-    </p>
+    </div>
   </form>
 <?php
 }
@@ -364,7 +559,7 @@ function chatease_render_input_form(string $form_id, array $values, array $label
 function chatease_render_confirm_screen(string $form_id, array $values, array $labels): void
 {
 ?>
-  <form method="post" class="chatease-contact-form-confirm">
+  <form id="chatease-form-submit" method="post" class="chatease-contact-form-confirm">
     <?php wp_nonce_field('chatease_contact_form_' . $form_id, '_chatease_nonce'); ?>
     <input type="hidden" name="chatease_step" value="submit" />
 
@@ -387,19 +582,17 @@ function chatease_render_confirm_screen(string $form_id, array $values, array $l
         <td><?php echo nl2br(esc_html($values['message'])); ?></td>
       </tr>
     </table>
-
-    <p>
-      <button type="submit">送信する</button>
-    </p>
   </form>
 
-  <form method="post" class="chatease-contact-form-back">
+  <form id="chatease-form-back" method="post" class="chatease-contact-form-back">
     <?php wp_nonce_field('chatease_contact_form_' . $form_id, '_chatease_nonce'); ?>
     <input type="hidden" name="chatease_step" value="input" />
-    <p>
-      <button type="submit">入力画面に戻る</button>
-    </p>
   </form>
+
+  <div class="chatease-confirm-buttons">
+    <button type="submit" form="chatease-form-back">入力画面に戻る</button>
+    <button type="submit" form="chatease-form-submit">送信する</button>
+  </div>
 <?php
 }
 
@@ -480,6 +673,135 @@ function chatease_verify_recaptcha(): bool
 }
 
 /**
+ * 共通設定の API トークン / Workspace Slug を検証し、
+ * 成功時はワークスペース名を保存、失敗時はエラーを表示する
+ */
+function chatease_validate_workspace_settings(): void
+{
+  $api_token = trim((string) get_option('chatease_api_token', ''));
+  $slug      = trim((string) get_option('chatease_workspace_slug', ''));
+
+  // 両方とも空 → 完全未設定なので名前を消して終了（エラーは出さない）
+  if ($api_token === '' && $slug === '') {
+    delete_option('chatease_workspace_name');
+    return;
+  }
+
+  // どちらか片方だけ → 未設定とみなしてエラー扱い
+  if ($api_token === '' || $slug === '') {
+    delete_option('chatease_workspace_name');
+
+    add_settings_error(
+      'chatease_contact_form',
+      'chatease_workspace_validation',
+      'API トークンとワークスペーススラッグは両方設定する必要があります（共通設定）。',
+      'error'
+    );
+    return;
+  }
+
+  if (!class_exists(\Bagooon\ChatEase\ChatEaseClient::class)) {
+    add_settings_error(
+      'chatease_contact_form',
+      'chatease_workspace_validation',
+      'ChatEase クライアントが読み込まれていないため、ワークスペース名を確認できませんでした。',
+      'error'
+    );
+    return;
+  }
+
+  try {
+    $client = new \Bagooon\ChatEase\ChatEaseClient($api_token, $slug);
+    $name   = $client->getWorkspaceName();
+
+    update_option('chatease_workspace_name', $name);
+
+    add_settings_error(
+      'chatease_contact_form',
+      'chatease_workspace_validation',
+      'ワークスペース情報を確認しました：' . $name,
+      'updated'
+    );
+  } catch (\Throwable $e) {
+    delete_option('chatease_workspace_name');
+
+    add_settings_error(
+      'chatease_contact_form',
+      'chatease_workspace_validation',
+      'ワークスペース確認エラー：' . $e->getMessage(),
+      'error'
+    );
+  }
+}
+
+/**
+ * 各フォーム専用の API トークン / Workspace Slug を検証し、
+ * 成功時はフォーム専用のワークスペース名を保存、失敗時はエラーを表示する
+ *
+ * - 両方空      → グローバル設定を使う想定なので、フォーム側の name は削除
+ * - 片方だけ    → 未設定としてエラー（メタは削除）
+ * - 両方あり    → API で name を取得し、_chatease_workspace_name に保存
+ */
+function chatease_validate_form_workspace_settings(int $post_id): void
+{
+  if (get_post_type($post_id) !== 'chatease_form') {
+    return;
+  }
+
+  $api_token = trim((string) get_post_meta($post_id, '_chatease_api_token', true));
+  $slug      = trim((string) get_post_meta($post_id, '_chatease_workspace_slug', true));
+
+  // 両方とも空 → グローバル設定を使う前提。フォーム専用の名前は削除。
+  if ($api_token === '' && $slug === '') {
+    delete_post_meta($post_id, '_chatease_workspace_name');
+    return;
+  }
+
+  // 片方だけ → エラー & フォーム用 name 削除
+  if ($api_token === '' || $slug === '') {
+    delete_post_meta($post_id, '_chatease_workspace_name');
+
+    // 一時的にエラーメッセージを保存して、編集画面で表示する
+    set_transient(
+      'chatease_form_workspace_error_' . $post_id,
+      'API トークンとワークスペーススラッグは両方設定する必要があります（フォーム専用設定）。',
+      60
+    );
+    return;
+  }
+
+  if (!class_exists(\Bagooon\ChatEase\ChatEaseClient::class)) {
+    set_transient(
+      'chatease_form_workspace_error_' . $post_id,
+      'ChatEase クライアントが読み込まれていないため、フォーム専用のワークスペース名を確認できませんでした。',
+      60
+    );
+    return;
+  }
+
+  try {
+    $client = new \Bagooon\ChatEase\ChatEaseClient($api_token, $slug);
+    $name   = $client->getWorkspaceName();
+
+    update_post_meta($post_id, '_chatease_workspace_name', $name);
+
+    set_transient(
+      'chatease_form_workspace_notice_' . $post_id,
+      'フォーム専用のワークスペース情報を確認しました：' . $name,
+      60
+    );
+  } catch (\Throwable $e) {
+    delete_post_meta($post_id, '_chatease_workspace_name');
+
+    set_transient(
+      'chatease_form_workspace_error_' . $post_id,
+      'フォーム専用ワークスペース確認エラー：' . $e->getMessage(),
+      60
+    );
+  }
+}
+
+/**
  * ChatEase に送信する（実際には SDK を呼び出す）
  *
  * @param array{company:string,name:string,email:string,message:string} $values
@@ -521,7 +843,10 @@ function chatease_send_to_chatease(array $values, int $form_post_id = 0): string
   try {
     $client = new ChatEaseClient($api_token, $workspace_slug);
 
-    $uniqueKey = 'wp-' . date('Ymd-His') . '-' . wp_generate_password(8, false);
+    $tz  = wp_timezone(); // WordPressの設定タイムゾーン
+    $now = new DateTime('now', $tz);
+
+    $uniqueKey = sprintf('wp-%s-%s', $now->format('Ymd-His'), wp_generate_password(8, false));
 
     $client->createBoardWithStatusAndMessage([
       'title' => 'Webフォームからのお問い合わせ',
@@ -568,29 +893,19 @@ function chatease_send_notify_email(array $values, int $form_post_id = 0): void
   wp_mail($to, $subject, $body, $headers);
 }
 
-add_action('add_meta_boxes', function () {
-  add_meta_box(
-    'chatease_form_labels',
-    'フォームラベル設定',
-    'chatease_render_form_labels_metabox',
-    'chatease_form',
-    'normal',
-    'default'
-  );
-});
-
 function chatease_render_form_labels_metabox(WP_Post $post)
 {
   wp_nonce_field('chatease_form_labels', '_chatease_form_labels_nonce');
 
-  $label_company  = get_post_meta($post->ID, '_chatease_label_company', true);
-  $label_name     = get_post_meta($post->ID, '_chatease_label_name', true);
-  $label_email    = get_post_meta($post->ID, '_chatease_label_email', true);
-  $label_message  = get_post_meta($post->ID, '_chatease_label_message', true);
-  $deadline_days  = get_post_meta($post->ID, '_chatease_deadline_days', true);
-  $notify_email   = get_post_meta($post->ID, '_chatease_notify_email', true);
-  $form_api_token = get_post_meta($post->ID, '_chatease_api_token', true);
-  $form_slug      = get_post_meta($post->ID, '_chatease_workspace_slug', true);
+  $label_company       = get_post_meta($post->ID, '_chatease_label_company', true);
+  $label_name          = get_post_meta($post->ID, '_chatease_label_name', true);
+  $label_email         = get_post_meta($post->ID, '_chatease_label_email', true);
+  $label_message       = get_post_meta($post->ID, '_chatease_label_message', true);
+  $deadline_days       = get_post_meta($post->ID, '_chatease_deadline_days', true);
+  $notify_email        = get_post_meta($post->ID, '_chatease_notify_email', true);
+  $form_api_token      = get_post_meta($post->ID, '_chatease_api_token', true);
+  $form_slug           = get_post_meta($post->ID, '_chatease_workspace_slug', true);
+  $form_workspace_name = get_post_meta($post->ID, '_chatease_workspace_name', true);
 
   // デフォルト値
   if ($label_company === '') $label_company = '会社名';
@@ -609,8 +924,9 @@ function chatease_render_form_labels_metabox(WP_Post $post)
   }
 
   // API トークン / slug は「空ならグローバルを参考表示」にしておくと親切
-  $global_api_token = get_option('chatease_api_token', '');
-  $global_slug      = get_option('chatease_workspace_slug', '');
+  $global_api_token      = get_option('chatease_api_token', '');
+  $global_slug           = get_option('chatease_workspace_slug', '');
+  $global_workspace_name = get_option('chatease_workspace_name', '');
 ?>
   <table class="form-table">
     <tr>
@@ -670,7 +986,7 @@ function chatease_render_form_labels_metabox(WP_Post $post)
       </td>
     </tr>
     <tr>
-      <th><label for="chatease_form_api_token">API トークン（このフォーム専用）</label></th>
+      <th><label for="chatease_form_api_token">API トークン<br>（このフォーム専用）</label></th>
       <td>
         <input type="text"
           id="chatease_form_api_token"
@@ -678,8 +994,8 @@ function chatease_render_form_labels_metabox(WP_Post $post)
           value="<?php echo esc_attr($form_api_token); ?>"
           class="regular-text" />
         <p class="description">
-          空欄の場合は共通設定の API トークン
-          <?php if ($global_api_token !== ''): ?>
+          トークン／スラッグが共に空欄の場合は共通設定
+          <?php if ($global_workspace_name !== ''): ?>
             （現在設定済み）
           <?php endif; ?>
           が使用されます。
@@ -687,7 +1003,7 @@ function chatease_render_form_labels_metabox(WP_Post $post)
       </td>
     </tr>
     <tr>
-      <th><label for="chatease_form_workspace_slug">ワークスペーススラッグ（このフォーム専用）</label></th>
+      <th><label for="chatease_form_workspace_slug">ワークスペーススラッグ<br>（このフォーム専用）</label></th>
       <td>
         <input type="text"
           id="chatease_form_workspace_slug"
@@ -695,52 +1011,43 @@ function chatease_render_form_labels_metabox(WP_Post $post)
           value="<?php echo esc_attr($form_slug); ?>"
           class="regular-text" />
         <p class="description">
-          空欄の場合は共通設定の Workspace Slug
-          <?php if ($global_slug !== ''): ?>
+          トークン／スラッグが共に空欄の場合は共通設定
+          <?php if ($global_workspace_name !== ''): ?>
             （現在設定済み）
           <?php endif; ?>
           が使用されます。
         </p>
       </td>
     </tr>
+    <tr>
+      <th><label>ワークスペース名</label></th>
+      <td>
+        <?php if ($form_workspace_name !== ''): ?>
+          <input type="text"
+            readonly
+            class="regular-text"
+            value="<?php echo esc_attr($form_workspace_name); ?>" />
+          <p class="description chatease-status-ok">
+            ワークスペースとの紐付けが完了しています。
+          </p>
+        <?php elseif ($form_api_token === '' && $form_slug === '' && $global_workspace_name !== ''): ?>
+          <input type="text"
+            readonly
+            class="regular-text"
+            value="<?php echo esc_attr($global_workspace_name); ?>" />
+          <p class="description chatease-status-ok">
+            共通設定のワークスペースが使用されます。
+          </p>
+        <?php else: ?>
+          <p class="description chatease-status-error">
+            ワークスペースとの紐付けが完了していません。共通設定、またはこのフォーム専用の API トークン／スラッグを設定してください。
+          </p>
+        <?php endif; ?>
+      </td>
+    </tr>
   </table>
 <?php
 }
-
-add_action('save_post_chatease_form', function ($post_id) {
-  if (
-    !isset($_POST['_chatease_form_labels_nonce']) ||
-    !wp_verify_nonce($_POST['_chatease_form_labels_nonce'], 'chatease_form_labels')
-  ) {
-    return;
-  }
-
-  if (defined('DOING_AUTOSAVE') && DOING_AUTOSAVE) {
-    return;
-  }
-
-  if (!current_user_can('edit_post', $post_id)) {
-    return;
-  }
-
-  $fields = [
-    'chatease_label_company'      => '_chatease_label_company',
-    'chatease_label_name'         => '_chatease_label_name',
-    'chatease_label_email'        => '_chatease_label_email',
-    'chatease_label_message'      => '_chatease_label_message',
-    'chatease_deadline_days'      => '_chatease_deadline_days',
-    'chatease_form_notify_email'  => '_chatease_notify_email',
-    'chatease_form_api_token'     => '_chatease_api_token',
-    'chatease_form_workspace_slug' => '_chatease_workspace_slug',
-  ];
-
-  foreach ($fields as $input => $meta_key) {
-    if (isset($_POST[$input])) {
-      $value = sanitize_text_field(wp_unslash($_POST[$input]));
-      update_post_meta($post_id, $meta_key, $value);
-    }
-  }
-});
 
 /**
  * 指定フォームIDのラベルを取得（なければデフォルト）
@@ -830,39 +1137,76 @@ function chatease_get_notify_email(int $form_post_id): string
 }
 
 /**
- * フォームごとの API トークン / Workspace Slug を取得
+ * フォームごとの API トークン / Workspace Slug / Workspace Name を取得
  *
- * @return array{api_token: string, workspace_slug: string, error: string}
+ * 優先順位：
+ *   1. フォーム専用設定（両方セットされている場合）
+ *   2. グローバル設定（両方セットされている場合）
+ *
+ * @return array{
+ *   api_token: string,
+ *   workspace_slug: string,
+ *   workspace_name: string,
+ *   error: string
+ * }
  */
 function chatease_get_api_credentials(int $form_post_id): array
 {
-  $error = '';
+  $error          = '';
+  $api_token      = '';
+  $slug           = '';
+  $workspace_name = '';
 
-  // まずフォーム専用設定を見に行く
-  $api_token = '';
-  $slug      = '';
-
+  // 1) フォーム専用設定を優先
   if ($form_post_id > 0 && get_post_type($form_post_id) === 'chatease_form') {
     $api_token = trim((string) get_post_meta($form_post_id, '_chatease_api_token', true));
     $slug      = trim((string) get_post_meta($form_post_id, '_chatease_workspace_slug', true));
+
+    // 両方セットされている → フォーム専用設定を採用
+    if ($api_token !== '' && $slug !== '') {
+      $workspace_name = trim((string) get_post_meta($form_post_id, '_chatease_workspace_name', true));
+
+      // name が空でも、とりあえずこの組み合わせを使う（API 呼び出しは別途）
+      return [
+        'api_token'      => $api_token,
+        'workspace_slug' => $slug,
+        'workspace_name' => $workspace_name,
+        'error'          => '',
+      ];
+    }
+
+    // 片方だけ埋まっている → 要件②：エラー
+    if ($api_token !== '' || $slug !== '') {
+      return [
+        'api_token'      => '',
+        'workspace_slug' => '',
+        'workspace_name' => '',
+        'error'          => 'フォーム専用の API トークンと Workspace Slug は両方設定する必要があります。',
+      ];
+    }
   }
 
-  // 空欄ならグローバル設定を使用
-  if ($api_token === '') {
-    $api_token = trim((string) get_option('chatease_api_token', ''));
-  }
-  if ($slug === '') {
-    $slug = trim((string) get_option('chatease_workspace_slug', ''));
-  }
+  // 2) グローバル設定を使用
+  $api_token = trim((string) get_option('chatease_api_token', ''));
+  $slug      = trim((string) get_option('chatease_workspace_slug', ''));
+  $workspace_name = trim((string) get_option('chatease_workspace_name', ''));
 
-  // どちらかでも空ならエラー扱い
-  if ($api_token === '' || $slug === '') {
-    $error = 'API トークンまたは Workspace Slug が設定されていません（フォーム固有・共通設定の両方とも未設定）。';
+  // 両方空 → 未設定
+  if ($api_token === '' && $slug === '') {
+    $error = 'API トークンと Workspace Slug が設定されていません（共通設定）。';
+  }
+  // 片方だけ → エラー
+  elseif ($api_token === '' || $slug === '') {
+    $error = 'API トークンと Workspace Slug は両方設定する必要があります（共通設定）。';
+    $api_token      = '';
+    $slug           = '';
+    $workspace_name = '';
   }
 
   return [
     'api_token'      => $api_token,
     'workspace_slug' => $slug,
+    'workspace_name' => $workspace_name,
     'error'          => $error,
   ];
 }
