@@ -1,0 +1,106 @@
+.chatease-intro {
+  margin: 0 0 1.25rem;
+  padding: 1rem 1.25rem;
+  border: 1px solid #dcdfe3;
+  background: #f7f9fc;
+  border-radius: 6px;
+}
+
+.chatease-intro p {
+  margin: 0;
+  line-height: 1.8;
+}
+
+.chatease-contact-form,
+.chatease-contact-form-confirm,
+.chatease-contact-form-back {
+  margin: 0;
+}
+
+.chatease-field {
+  margin: 0 0 1rem;
+}
+
+.chatease-field__label {
+  margin: 0 0 0.35rem;
+  font-weight: 600;
+}
+
+.chatease-field__input input,
+.chatease-field__input textarea {
+  width: 100%;
+  max-width: 680px;
+  padding: 0.6rem 0.75rem;
+  border: 1px solid #c8ced6;
+  border-radius: 4px;
+  box-sizing: border-box;
+}
+
+.chatease-field__input textarea {
+  min-height: 10rem;
+  resize: vertical;
+}
+
+.chatease-required__label {
+  display: inline-block;
+  margin-left: 0.5rem;
+  padding: 0.1rem 0.45rem;
+  border-radius: 4px;
+  font-size: 0.75rem;
+  color: #ffffff;
+  background: #d63638;
+  vertical-align: middle;
+}
+
+.chatease-form-buttons,
+.chatease-confirm-buttons {
+  display: flex;
+  gap: 0.75rem;
+  margin-top: 1rem;
+}
+
+.chatease-form-buttons button,
+.chatease-confirm-buttons button {
+  cursor: pointer;
+  padding: 0.55rem 1.1rem;
+}
+
+.chatease-confirm-table {
+  width: 100%;
+  max-width: 760px;
+  border-collapse: collapse;
+  margin-top: 0.75rem;
+}
+
+.chatease-confirm-table th,
+.chatease-confirm-table td {
+  border: 1px solid #d3d7dc;
+  padding: 0.75rem;
+  vertical-align: top;
+}
+
+.chatease-confirm-table th {
+  width: 220px;
+  background: #f7f9fc;
+  text-align: left;
+}
+
+.chatease-errors {
+  margin: 0 0 1rem;
+  padding: 0.75rem 1rem;
+  border-left: 4px solid #d63638;
+  background: #fff2f2;
+}
+
+.chatease-errors ul {
+  margin: 0;
+  padding-left: 1.2rem;
+}
+
+.chatease-complete {
+  margin-top: 1rem;
+  padding: 1rem 1.25rem;
+  border: 1px solid #a7d6a7;
+  background: #f3fcf3;
+  border-radius: 6px;
+}

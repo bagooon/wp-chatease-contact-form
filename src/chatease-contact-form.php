@@ -2,7 +2,7 @@
 /*
 Plugin Name: ChatEase Contact Form
 Description: ChatEase 連携用の確認画面付き問い合わせフォーム（reCAPTCHA v2 対応・セッション方式）
-Version: 0.1.0
+Version: 0.3.0
 Author: Hashimoto Giken
 */
 
@@ -16,6 +16,19 @@ if (file_exists(__DIR__ . '/vendor/autoload.php')) {
 }
 
 use Bagooon\ChatEase\ChatEaseClient;
+
+const CHATEASE_PLUGIN_STYLE_HANDLE = 'chatease-contact-form';
+const CHATEASE_PLUGIN_STYLE_VERSION = '0.3.0';
+const CHATEASE_DEFAULT_BOARD_TITLE = 'フォームからのお問い合わせ';
+
+/*
+ * Function Map:
+ * 1) Admin UI: chatease_render_settings_page, chatease_render_form_labels_metabox
+ * 2) Front Flow: chatease_render_contact_form -> input -> confirm -> complete
+ * 3) Validation: chatease_validate_workspace_settings, chatease_validate_form_workspace_settings
+ * 4) Integration: chatease_send_to_chatease, chatease_send_notify_email
+ * 5) Accessors/Utilities: chatease_get_*, sanitize helpers, reCAPTCHA verifier
+ */
 
 /**
  * フロント側でセッションを開始
@@ -75,6 +88,13 @@ add_action('admin_enqueue_scripts', function () {
  * reCAPTCHA スクリプト読み込み
  */
 add_action('wp_enqueue_scripts', function () {
+  wp_register_style(
+    CHATEASE_PLUGIN_STYLE_HANDLE,
+    plugins_url('assets/chatease-contact-form.css', __FILE__),
+    [],
+    CHATEASE_PLUGIN_STYLE_VERSION
+  );
+
   $site_key = get_option('chatease_recaptcha_site_key', '');
   if ($site_key !== '') {
     wp_enqueue_script(
@@ -115,20 +135,20 @@ add_action('admin_init', function () {
 add_action('admin_menu', function () {
   // トップレベルメニュー「ChatEase」
   add_menu_page(
-    'ChatEase',               // ページタイトル
-    'ChatEase',               // メニュータイトル
-    'manage_options',         // 権限
-    'chatease_root',          // メニュースラッグ
+    'ChatEase',                      // ページタイトル
+    'ChatEase',                      // メニュータイトル
+    'manage_options',                // 権限
+    'chatease_root',                 // メニュースラッグ
     'chatease_render_settings_page', // 初期表示は共通設定ページでOK
-    'dashicons-format-chat',  // アイコン（お好みで）
-    25                        // メニュー位置（Yoastとかと被らないあたり）
+    'dashicons-format-chat',         // アイコン（お好みで）
+    25                               // メニュー位置（Yoastとかと被らないあたり）
   );
 
   // ▼ 共通設定サブメニュー（トップレベルと同じ slug にしても良い）
   add_submenu_page(
     'chatease_root',               // 親メニュー slug
-    'ChatEase 共通設定',           // ページタイトル
-    '共通設定',                    // サブメニュータイトル
+    'ChatEase 共通設定',            // ページタイトル
+    '共通設定',                     // サブメニュータイトル
     'manage_options',
     'chatease_root',               // メニュースラッグ（親と同じ＝クリックで同じ画面）
     'chatease_render_settings_page'
@@ -167,6 +187,7 @@ add_action('save_post_chatease_form', function ($post_id) {
     'chatease_label_name'         => '_chatease_label_name',
     'chatease_label_email'        => '_chatease_label_email',
     'chatease_label_message'      => '_chatease_label_message',
+    'chatease_board_title'        => '_chatease_board_title',
     'chatease_deadline_days'      => '_chatease_deadline_days',
     'chatease_form_notify_email'  => '_chatease_notify_email',
     'chatease_form_api_token'     => '_chatease_api_token',
@@ -179,6 +200,10 @@ add_action('save_post_chatease_form', function ($post_id) {
       update_post_meta($post_id, $meta_key, $value);
     }
   }
+
+  // チェックボックスは未チェック時にPOSTされないため明示的に保存
+  $use_plugin_style = isset($_POST['chatease_use_plugin_style']) ? '1' : '0';
+  update_post_meta($post_id, '_chatease_use_plugin_style', $use_plugin_style);
 
   // フォーム専用のワークスペース設定を検証
   chatease_validate_form_workspace_settings($post_id);
@@ -345,6 +370,12 @@ function chatease_render_settings_page()
 }
 
 /**
+ * ==============================
+ * Front Rendering
+ * ==============================
+ */
+
+/**
  * ショートコード [chatease_contact_form]
  */
 add_shortcode('chatease_contact_form', 'chatease_render_contact_form');
@@ -366,6 +397,10 @@ function chatease_render_contact_form($atts)
     if ($posted_id > 0) {
       $form_post_id = $posted_id;
     }
+  }
+
+  if (chatease_should_use_plugin_style($form_post_id)) {
+    wp_enqueue_style(CHATEASE_PLUGIN_STYLE_HANDLE);
   }
 
   $form_id = $form_post_id > 0 ? 'form_' . $form_post_id : 'default';
@@ -475,12 +510,7 @@ function chatease_render_contact_form($atts)
 function chatease_render_input_form(string $form_id, array $values, array $labels): void
 {
   $site_key = get_option('chatease_recaptcha_site_key', '');
-
-  // form_id から chatease_form の投稿IDを推定
-  $form_post_id = 0;
-  if (strpos($form_id, 'form_') === 0) {
-    $form_post_id = (int) substr($form_id, strlen('form_'));
-  }
+  $form_post_id = chatease_extract_form_post_id_from_form_id($form_id);
 
   // フォーム専用 → なければグローバル の順でワークスペース名を取得
   $creds = chatease_get_api_credentials($form_post_id);
@@ -505,6 +535,7 @@ function chatease_render_input_form(string $form_id, array $values, array $label
   <form method="post" class="chatease-contact-form">
     <?php wp_nonce_field('chatease_contact_form_' . $form_id, '_chatease_nonce'); ?>
     <input type="hidden" name="chatease_step" value="confirm" />
+    <input type="hidden" name="chatease_form_post_id" value="<?php echo esc_attr((string) $form_post_id); ?>" />
 
     <div class="chatease-field chatease-field--company">
       <div class="chatease-field__label">
@@ -515,9 +546,10 @@ function chatease_render_input_form(string $form_id, array $values, array $label
       </div>
     </div>
 
-    <div class="chatease-field chatease-field--name">
+    <div class="chatease-field chatease-field--name chatease-required">
       <div class="chatease-field__label">
-        <label for="cf_name"><?php echo esc_html($labels['name']); ?>（必須）</label>
+        <label for="cf_name"><?php echo esc_html($labels['name']); ?></label>
+        <span class="chatease-required__label">必須</span>
       </div>
       <div class="chatease-field__input">
         <input id="cf_name" type="text" name="cf_name" value="<?php echo esc_attr($values['name']); ?>" required />
@@ -526,7 +558,8 @@ function chatease_render_input_form(string $form_id, array $values, array $label
 
     <div class="chatease-field chatease-field--email">
       <div class="chatease-field__label">
-        <label for="cf_email"><?php echo esc_html($labels['email']); ?>（必須）</label>
+        <label for="cf_email"><?php echo esc_html($labels['email']); ?></label>
+        <span class="chatease-required__label">必須</span>
       </div>
       <div class="chatease-field__input">
         <input id="cf_email" type="email" name="cf_email" value="<?php echo esc_attr($values['email']); ?>" required />
@@ -535,7 +568,8 @@ function chatease_render_input_form(string $form_id, array $values, array $label
 
     <div class="chatease-field chatease-field--message">
       <div class="chatease-field__label">
-        <label for="cf_message"><?php echo esc_html($labels['message']); ?>（必須）</label>
+        <label for="cf_message"><?php echo esc_html($labels['message']); ?></label>
+        <span class="chatease-required__label">必須</span>
       </div>
       <div class="chatease-field__input">
         <textarea id="cf_message" name="cf_message" rows="5" required><?php echo esc_textarea($values['message']); ?></textarea>
@@ -558,10 +592,13 @@ function chatease_render_input_form(string $form_id, array $values, array $label
  */
 function chatease_render_confirm_screen(string $form_id, array $values, array $labels): void
 {
+  $form_post_id = chatease_extract_form_post_id_from_form_id($form_id);
+
 ?>
   <form id="chatease-form-submit" method="post" class="chatease-contact-form-confirm">
     <?php wp_nonce_field('chatease_contact_form_' . $form_id, '_chatease_nonce'); ?>
     <input type="hidden" name="chatease_step" value="submit" />
+    <input type="hidden" name="chatease_form_post_id" value="<?php echo esc_attr((string) $form_post_id); ?>" />
 
     <h2>入力内容の確認</h2>
     <table class="chatease-confirm-table">
@@ -587,6 +624,7 @@ function chatease_render_confirm_screen(string $form_id, array $values, array $l
   <form id="chatease-form-back" method="post" class="chatease-contact-form-back">
     <?php wp_nonce_field('chatease_contact_form_' . $form_id, '_chatease_nonce'); ?>
     <input type="hidden" name="chatease_step" value="input" />
+    <input type="hidden" name="chatease_form_post_id" value="<?php echo esc_attr((string) $form_post_id); ?>" />
   </form>
 
   <div class="chatease-confirm-buttons">
@@ -607,6 +645,12 @@ function chatease_render_complete_screen(): void
   </div>
 <?php
 }
+
+/**
+ * ==============================
+ * Input / Security Helpers
+ * ==============================
+ */
 
 /**
  * テキストフィールド用の sanitize
@@ -671,6 +715,12 @@ function chatease_verify_recaptcha(): bool
 
   return !empty($data['success']);
 }
+
+/**
+ * ==============================
+ * Admin Validation
+ * ==============================
+ */
 
 /**
  * 共通設定の API トークン / Workspace Slug を検証し、
@@ -802,6 +852,12 @@ function chatease_validate_form_workspace_settings(int $post_id): void
 }
 
 /**
+ * ==============================
+ * ChatEase / Notification Integration
+ * ==============================
+ */
+
+/**
  * ChatEase に送信する（実際には SDK を呼び出す）
  *
  * @param array{company:string,name:string,email:string,message:string} $values
@@ -849,7 +905,7 @@ function chatease_send_to_chatease(array $values, int $form_post_id = 0): string
     $uniqueKey = sprintf('wp-%s-%s', $now->format('Ymd-His'), wp_generate_password(8, false));
 
     $client->createBoardWithStatusAndMessage([
-      'title' => 'Webフォームからのお問い合わせ',
+      'title' => chatease_get_board_title($form_post_id),
       'guest' => [
         'name'  => $guestName,
         'email' => $values['email'],
@@ -893,6 +949,12 @@ function chatease_send_notify_email(array $values, int $form_post_id = 0): void
   wp_mail($to, $subject, $body, $headers);
 }
 
+/**
+ * ==============================
+ * Admin Metabox
+ * ==============================
+ */
+
 function chatease_render_form_labels_metabox(WP_Post $post)
 {
   wp_nonce_field('chatease_form_labels', '_chatease_form_labels_nonce');
@@ -906,6 +968,8 @@ function chatease_render_form_labels_metabox(WP_Post $post)
   $form_api_token      = get_post_meta($post->ID, '_chatease_api_token', true);
   $form_slug           = get_post_meta($post->ID, '_chatease_workspace_slug', true);
   $form_workspace_name = get_post_meta($post->ID, '_chatease_workspace_name', true);
+  $use_plugin_style    = get_post_meta($post->ID, '_chatease_use_plugin_style', true);
+  $board_title         = trim((string) get_post_meta($post->ID, '_chatease_board_title', true));
 
   // デフォルト値
   if ($label_company === '') $label_company = '会社名';
@@ -923,9 +987,13 @@ function chatease_render_form_labels_metabox(WP_Post $post)
     $notify_email = get_option('chatease_notify_email', get_option('admin_email'));
   }
 
+  // スタイル適用は未設定時に ON をデフォルトとする
+  $is_use_plugin_style = $use_plugin_style === '' ? true : ((string) $use_plugin_style !== '0');
+  if ($board_title === '') {
+    $board_title = CHATEASE_DEFAULT_BOARD_TITLE;
+  }
+
   // API トークン / slug は「空ならグローバルを参考表示」にしておくと親切
-  $global_api_token      = get_option('chatease_api_token', '');
-  $global_slug           = get_option('chatease_workspace_slug', '');
   $global_workspace_name = get_option('chatease_workspace_name', '');
 ?>
   <table class="form-table">
@@ -982,6 +1050,32 @@ function chatease_render_form_labels_metabox(WP_Post $post)
           class="regular-text" />
         <p class="description">
           このフォームからの通知メール送信先。未設定時はグローバル設定 → それもなければサイト管理者メールが使われます。
+        </p>
+      </td>
+    </tr>
+    <tr>
+      <th><label for="chatease_use_plugin_style">プラグイン同梱スタイルを適用</label></th>
+      <td>
+        <label>
+          <input type="checkbox"
+            id="chatease_use_plugin_style"
+            name="chatease_use_plugin_style"
+            value="1"
+            <?php checked($is_use_plugin_style); ?> />
+          フロント画面でプラグインのCSSを適用する
+        </label>
+      </td>
+    </tr>
+    <tr>
+      <th><label for="chatease_board_title">チャットボードタイトル</label></th>
+      <td>
+        <input type="text"
+          id="chatease_board_title"
+          name="chatease_board_title"
+          value="<?php echo esc_attr($board_title); ?>"
+          class="regular-text" />
+        <p class="description">
+          送信時に作成されるチャットボードのタイトルです。未設定時は「<?php echo esc_html(CHATEASE_DEFAULT_BOARD_TITLE); ?>」が使われます。
         </p>
       </td>
     </tr>
@@ -1048,6 +1142,12 @@ function chatease_render_form_labels_metabox(WP_Post $post)
   </table>
 <?php
 }
+
+/**
+ * ==============================
+ * Data Accessors
+ * ==============================
+ */
 
 /**
  * 指定フォームIDのラベルを取得（なければデフォルト）
@@ -1134,6 +1234,49 @@ function chatease_get_notify_email(int $form_post_id): string
 
   // 最低保証
   return (string) get_option('admin_email');
+}
+
+/**
+ * form_id（例: form_123）から投稿IDを取得する
+ */
+function chatease_extract_form_post_id_from_form_id(string $form_id): int
+{
+  if (strpos($form_id, 'form_') === 0) {
+    return (int) substr($form_id, strlen('form_'));
+  }
+
+  return 0;
+}
+
+/**
+ * フォームごとのプラグインCSS適用可否を取得（未設定時は ON）
+ */
+function chatease_should_use_plugin_style(int $form_post_id): bool
+{
+  if ($form_post_id > 0 && get_post_type($form_post_id) === 'chatease_form') {
+    $v = get_post_meta($form_post_id, '_chatease_use_plugin_style', true);
+    if ($v === '') {
+      return true;
+    }
+    return (string) $v !== '0';
+  }
+
+  return true;
+}
+
+/**
+ * チャットボードタイトルをフォームごとに取得（未設定時はデフォルト）
+ */
+function chatease_get_board_title(int $form_post_id): string
+{
+  if ($form_post_id > 0 && get_post_type($form_post_id) === 'chatease_form') {
+    $title = trim((string) get_post_meta($form_post_id, '_chatease_board_title', true));
+    if ($title !== '') {
+      return $title;
+    }
+  }
+
+  return CHATEASE_DEFAULT_BOARD_TITLE;
 }
 
 /**
