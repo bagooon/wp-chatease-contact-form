@@ -4,7 +4,7 @@
         "Read more about it at https://getcomposer.org/doc/01-basic-usage.md#installing-dependencies",
         "This file is @generated automatically"
     ],
-    "content-hash": "f11f5a2a16826882525dfc960426bc15",
+    "content-hash": "14590bd5aafbb6da90a95f4b43ef897b",
     "packages": [
         {
             "name": "bagooon/chatease-php-client",
