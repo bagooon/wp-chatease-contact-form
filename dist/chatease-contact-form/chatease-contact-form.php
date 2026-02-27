@@ -2,7 +2,7 @@
 /*
 Plugin Name: ChatEase Contact Form
 Description: ChatEase 連携用の確認画面付き問い合わせフォーム（reCAPTCHA v2 対応・セッション方式）
-Version: 0.1.0
+Version: 0.3.0
 Author: Hashimoto Giken
 */
 
@@ -18,8 +18,17 @@ if (file_exists(__DIR__ . '/vendor/autoload.php')) {
 use Bagooon\ChatEase\ChatEaseClient;
 
 const CHATEASE_PLUGIN_STYLE_HANDLE = 'chatease-contact-form';
-const CHATEASE_PLUGIN_STYLE_VERSION = '0.2.0';
+const CHATEASE_PLUGIN_STYLE_VERSION = '0.3.0';
 const CHATEASE_DEFAULT_BOARD_TITLE = 'フォームからのお問い合わせ';
+
+/*
+ * Function Map:
+ * 1) Admin UI: chatease_render_settings_page, chatease_render_form_labels_metabox
+ * 2) Front Flow: chatease_render_contact_form -> input -> confirm -> complete
+ * 3) Validation: chatease_validate_workspace_settings, chatease_validate_form_workspace_settings
+ * 4) Integration: chatease_send_to_chatease, chatease_send_notify_email
+ * 5) Accessors/Utilities: chatease_get_*, sanitize helpers, reCAPTCHA verifier
+ */
 
 /**
  * フロント側でセッションを開始
@@ -126,20 +135,20 @@ add_action('admin_init', function () {
 add_action('admin_menu', function () {
   // トップレベルメニュー「ChatEase」
   add_menu_page(
-    'ChatEase',               // ページタイトル
-    'ChatEase',               // メニュータイトル
-    'manage_options',         // 権限
-    'chatease_root',          // メニュースラッグ
+    'ChatEase',                      // ページタイトル
+    'ChatEase',                      // メニュータイトル
+    'manage_options',                // 権限
+    'chatease_root',                 // メニュースラッグ
     'chatease_render_settings_page', // 初期表示は共通設定ページでOK
-    'dashicons-format-chat',  // アイコン（お好みで）
-    25                        // メニュー位置（Yoastとかと被らないあたり）
+    'dashicons-format-chat',         // アイコン（お好みで）
+    25                               // メニュー位置（Yoastとかと被らないあたり）
   );
 
   // ▼ 共通設定サブメニュー（トップレベルと同じ slug にしても良い）
   add_submenu_page(
     'chatease_root',               // 親メニュー slug
-    'ChatEase 共通設定',           // ページタイトル
-    '共通設定',                    // サブメニュータイトル
+    'ChatEase 共通設定',            // ページタイトル
+    '共通設定',                     // サブメニュータイトル
     'manage_options',
     'chatease_root',               // メニュースラッグ（親と同じ＝クリックで同じ画面）
     'chatease_render_settings_page'
@@ -359,6 +368,12 @@ function chatease_render_settings_page()
   </div>
 <?php
 }
+
+/**
+ * ==============================
+ * Front Rendering
+ * ==============================
+ */
 
 /**
  * ショートコード [chatease_contact_form]
@@ -632,6 +647,12 @@ function chatease_render_complete_screen(): void
 }
 
 /**
+ * ==============================
+ * Input / Security Helpers
+ * ==============================
+ */
+
+/**
  * テキストフィールド用の sanitize
  */
 function chatease_sanitize_text($value): string
@@ -694,6 +715,12 @@ function chatease_verify_recaptcha(): bool
 
   return !empty($data['success']);
 }
+
+/**
+ * ==============================
+ * Admin Validation
+ * ==============================
+ */
 
 /**
  * 共通設定の API トークン / Workspace Slug を検証し、
@@ -825,6 +852,12 @@ function chatease_validate_form_workspace_settings(int $post_id): void
 }
 
 /**
+ * ==============================
+ * ChatEase / Notification Integration
+ * ==============================
+ */
+
+/**
  * ChatEase に送信する（実際には SDK を呼び出す）
  *
  * @param array{company:string,name:string,email:string,message:string} $values
@@ -915,6 +948,12 @@ function chatease_send_notify_email(array $values, int $form_post_id = 0): void
 
   wp_mail($to, $subject, $body, $headers);
 }
+
+/**
+ * ==============================
+ * Admin Metabox
+ * ==============================
+ */
 
 function chatease_render_form_labels_metabox(WP_Post $post)
 {
@@ -1103,6 +1142,12 @@ function chatease_render_form_labels_metabox(WP_Post $post)
   </table>
 <?php
 }
+
+/**
+ * ==============================
+ * Data Accessors
+ * ==============================
+ */
 
 /**
  * 指定フォームIDのラベルを取得（なければデフォルト）
