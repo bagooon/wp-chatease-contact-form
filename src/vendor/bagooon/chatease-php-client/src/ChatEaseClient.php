@@ -117,6 +117,7 @@ class ChatEaseClient
      *   title: string,
      *   guest: array{name: string, email: string},
      *   boardUniqueKey: string,
+     *   memo?: string,
      *   inReplyTo?: string
      * } $params
      *
@@ -134,6 +135,7 @@ class ChatEaseClient
      *   title: string,
      *   guest: array{name: string, email: string},
      *   boardUniqueKey: string,
+     *   memo?: string,
      *   inReplyTo?: string,
      *   initialStatus: array{
      *     statusKey: string,
@@ -155,6 +157,7 @@ class ChatEaseClient
      *   title: string,
      *   guest: array{name: string, email: string},
      *   boardUniqueKey: string,
+     *   memo?: string,
      *   inReplyTo?: string,
      *   initialStatus: array{
      *     statusKey: string,

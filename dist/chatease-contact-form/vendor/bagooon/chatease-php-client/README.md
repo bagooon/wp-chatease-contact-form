@@ -49,6 +49,7 @@ $res1 = $client->createBoard([
         'name'  => '田中太郎',
         'email' => 'taro@example.com',
     ],
+    'memo' => 'メモを登録できます',
     'boardUniqueKey' => '20260225-1001',
 ]);
 
@@ -110,6 +111,7 @@ $name = $client->getWorkspaceName();
     'email' => string,
   ],
   'boardUniqueKey' => string,
+  'memo'           => string|null, // optional
   'inReplyTo'      => string|null, // optional
 ]
 ```

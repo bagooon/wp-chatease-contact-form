@@ -18,7 +18,7 @@ if (file_exists(__DIR__ . '/vendor/autoload.php')) {
 use Bagooon\ChatEase\ChatEaseClient;
 
 const CHATEASE_PLUGIN_STYLE_HANDLE = 'chatease-contact-form';
-const CHATEASE_PLUGIN_STYLE_VERSION = '0.3.0';
+const CHATEASE_PLUGIN_STYLE_VERSION = '0.4.0';
 const CHATEASE_DEFAULT_BOARD_TITLE = 'フォームからのお問い合わせ';
 
 /*
@@ -204,6 +204,14 @@ add_action('save_post_chatease_form', function ($post_id) {
   // チェックボックスは未チェック時にPOSTされないため明示的に保存
   $use_plugin_style = isset($_POST['chatease_use_plugin_style']) ? '1' : '0';
   update_post_meta($post_id, '_chatease_use_plugin_style', $use_plugin_style);
+
+  // 電話番号欄の表示有無もフォームごとに保持する。
+  $use_phone_field = isset($_POST['chatease_use_phone']) ? '1' : '0';
+  update_post_meta($post_id, '_chatease_use_phone', $use_phone_field);
+
+  // 電話番号欄を表示する場合に、必須にするかどうかもフォームごとに保持する。
+  $require_phone_field = isset($_POST['chatease_require_phone']) ? '1' : '0';
+  update_post_meta($post_id, '_chatease_require_phone', $require_phone_field);
 
   // フォーム専用のワークスペース設定を検証
   chatease_validate_form_workspace_settings($post_id);
@@ -413,6 +421,7 @@ function chatease_render_contact_form($atts)
     'company' => '',
     'name'    => '',
     'email'   => '',
+    'phone'   => '',
     'message' => '',
   ];
 
@@ -430,6 +439,7 @@ function chatease_render_contact_form($atts)
         $stored['company'] = isset($_POST['cf_company']) ? chatease_sanitize_text($_POST['cf_company']) : '';
         $stored['name']    = isset($_POST['cf_name']) ? chatease_sanitize_text($_POST['cf_name']) : '';
         $stored['email']   = isset($_POST['cf_email']) ? sanitize_email(wp_unslash($_POST['cf_email'])) : '';
+        $stored['phone']   = isset($_POST['cf_phone']) ? chatease_sanitize_text($_POST['cf_phone']) : '';
         $stored['message'] = isset($_POST['cf_message']) ? chatease_sanitize_textarea($_POST['cf_message']) : '';
 
         // reCAPTCHA 検証
@@ -444,6 +454,9 @@ function chatease_render_contact_form($atts)
         }
         if ($stored['email'] === '' || !is_email($stored['email'])) {
           $errors[] = '正しいメールアドレスを入力してください。';
+        }
+        if (chatease_should_use_phone_field($form_post_id) && chatease_is_phone_field_required($form_post_id) && $stored['phone'] === '') {
+          $errors[] = '電話番号を入力してください。';
         }
         if ($stored['message'] === '') {
           $errors[] = 'お問い合わせ内容を入力してください。';
@@ -511,6 +524,8 @@ function chatease_render_input_form(string $form_id, array $values, array $label
 {
   $site_key = get_option('chatease_recaptcha_site_key', '');
   $form_post_id = chatease_extract_form_post_id_from_form_id($form_id);
+  $use_phone_field = chatease_should_use_phone_field($form_post_id);
+  $is_phone_required = chatease_is_phone_field_required($form_post_id);
 
   // フォーム専用 → なければグローバル の順でワークスペース名を取得
   $creds = chatease_get_api_credentials($form_post_id);
@@ -566,6 +581,20 @@ function chatease_render_input_form(string $form_id, array $values, array $label
       </div>
     </div>
 
+    <?php if ($use_phone_field): ?>
+      <div class="chatease-field chatease-field--phone">
+        <div class="chatease-field__label">
+          <label for="cf_phone"><?php echo esc_html($labels['phone']); ?></label>
+          <?php if ($is_phone_required): ?>
+            <span class="chatease-required__label">必須</span>
+          <?php endif; ?>
+        </div>
+        <div class="chatease-field__input">
+          <input id="cf_phone" type="text" name="cf_phone" value="<?php echo esc_attr($values['phone'] ?? ''); ?>" <?php echo $is_phone_required ? 'required' : ''; ?> />
+        </div>
+      </div>
+    <?php endif; ?>
+
     <div class="chatease-field chatease-field--message">
       <div class="chatease-field__label">
         <label for="cf_message"><?php echo esc_html($labels['message']); ?></label>
@@ -593,6 +622,7 @@ function chatease_render_input_form(string $form_id, array $values, array $label
 function chatease_render_confirm_screen(string $form_id, array $values, array $labels): void
 {
   $form_post_id = chatease_extract_form_post_id_from_form_id($form_id);
+  $use_phone_field = chatease_should_use_phone_field($form_post_id);
 
 ?>
   <form id="chatease-form-submit" method="post" class="chatease-contact-form-confirm">
@@ -614,6 +644,12 @@ function chatease_render_confirm_screen(string $form_id, array $values, array $l
         <th><?php echo esc_html($labels['email']); ?></th>
         <td><?php echo esc_html($values['email']); ?></td>
       </tr>
+      <?php if ($use_phone_field): ?>
+        <tr>
+          <th><?php echo esc_html($labels['phone']); ?></th>
+          <td><?php echo ($values['phone'] ?? '') !== '' ? esc_html($values['phone']) : '（未入力）'; ?></td>
+        </tr>
+      <?php endif; ?>
       <tr>
         <th><?php echo esc_html($labels['message']); ?></th>
         <td><?php echo nl2br(esc_html($values['message'])); ?></td>
@@ -860,7 +896,7 @@ function chatease_validate_form_workspace_settings(int $post_id): void
 /**
  * ChatEase に送信する（実際には SDK を呼び出す）
  *
- * @param array{company:string,name:string,email:string,message:string} $values
+ * @param array{company:string,name:string,email:string,phone:string,message:string} $values
  * @param int $form_post_id chatease_form の投稿ID（フォームごとの設定に使用）
  * @return string エラー時はメッセージ、成功時は空文字
  */
@@ -895,6 +931,11 @@ function chatease_send_to_chatease(array $values, int $form_post_id = 0): string
 
   // 初回投稿内容は「問い合わせ内容のみ」
   $initialContent = $values['message'];
+  $memo = '';
+
+  if (($values['phone'] ?? '') !== '') {
+    $memo = 'TEL: ' . $values['phone'];
+  }
 
   try {
     $client = new ChatEaseClient($api_token, $workspace_slug);
@@ -911,6 +952,7 @@ function chatease_send_to_chatease(array $values, int $form_post_id = 0): string
         'email' => $values['email'],
       ],
       'boardUniqueKey' => $uniqueKey,
+      'memo' => $memo,
       'initialStatus' => [
         'statusKey' => 'scheduled_for_response',
         'timeLimit' => $timeLimit,
@@ -929,7 +971,7 @@ function chatease_send_to_chatease(array $values, int $form_post_id = 0): string
 /**
  * 管理者通知メールの送信
  *
- * @param array{company:string,name:string,email:string,message:string} $values
+ * @param array{company:string,name:string,email:string,phone:string,message:string} $values
  * @param int $form_post_id chatease_form の投稿ID
  */
 function chatease_send_notify_email(array $values, int $form_post_id = 0): void
@@ -942,6 +984,7 @@ function chatease_send_notify_email(array $values, int $form_post_id = 0): void
   $body   .= "会社名: " . ($values['company'] !== '' ? $values['company'] : '（未入力）') . "\n";
   $body   .= "お名前: " . $values['name'] . "\n";
   $body   .= "メールアドレス: " . $values['email'] . "\n";
+  $body   .= "電話番号: " . (($values['phone'] ?? '') !== '' ? $values['phone'] : '（未入力）') . "\n";
   $body   .= "お問い合わせ内容:\n" . $values['message'] . "\n";
 
   $headers = ['Content-Type: text/plain; charset=UTF-8'];
@@ -963,6 +1006,8 @@ function chatease_render_form_labels_metabox(WP_Post $post)
   $label_name          = get_post_meta($post->ID, '_chatease_label_name', true);
   $label_email         = get_post_meta($post->ID, '_chatease_label_email', true);
   $label_message       = get_post_meta($post->ID, '_chatease_label_message', true);
+  $use_phone_field     = get_post_meta($post->ID, '_chatease_use_phone', true);
+  $require_phone_field = get_post_meta($post->ID, '_chatease_require_phone', true);
   $deadline_days       = get_post_meta($post->ID, '_chatease_deadline_days', true);
   $notify_email        = get_post_meta($post->ID, '_chatease_notify_email', true);
   $form_api_token      = get_post_meta($post->ID, '_chatease_api_token', true);
@@ -976,6 +1021,8 @@ function chatease_render_form_labels_metabox(WP_Post $post)
   if ($label_name === '') $label_name = 'お名前';
   if ($label_email === '') $label_email = 'メールアドレス';
   if ($label_message === '') $label_message = 'お問い合わせ内容';
+  $is_use_phone_field = (string) $use_phone_field === '1';
+  $is_require_phone_field = (string) $require_phone_field === '1';
 
   // 期限日数のデフォルト：フォーム → グローバル → 1日
   if ($deadline_days === '') {
@@ -1023,6 +1070,34 @@ function chatease_render_form_labels_metabox(WP_Post $post)
       <td>
         <input type="text" id="chatease_label_message" name="chatease_label_message"
           value="<?php echo esc_attr($label_message); ?>" class="regular-text" />
+      </td>
+    </tr>
+    <tr>
+      <th><label for="chatease_use_phone">電話番号入力欄を表示</label></th>
+      <td>
+        <label>
+          <input type="checkbox"
+            id="chatease_use_phone"
+            name="chatease_use_phone"
+            value="1"
+            <?php checked($is_use_phone_field); ?> />
+          このフォームでは電話番号入力欄を表示する
+        </label>
+        <p class="description">
+          有効にすると、メールアドレス欄の下に電話番号入力欄が表示されます。
+        </p>
+        <label style="display:block; margin-top:8px;">
+          <input type="checkbox"
+            id="chatease_require_phone"
+            name="chatease_require_phone"
+            value="1"
+            <?php checked($is_require_phone_field); ?>
+            <?php disabled(!$is_use_phone_field); ?> />
+          電話番号を必須項目にする
+        </label>
+        <p class="description">
+          電話番号欄を表示する場合のみ有効です。
+        </p>
       </td>
     </tr>
     <tr>
@@ -1156,16 +1231,18 @@ function chatease_render_form_labels_metabox(WP_Post $post)
  *   company: string,
  *   name: string,
  *   email: string,
+ *   phone: string,
  *   message: string
  * }
  */
 function chatease_get_form_labels(int $form_post_id): array
 {
   $defaults = [
-    'company' => '会社名（任意）',
-    'name'    => 'お名前（必須）',
-    'email'   => 'メールアドレス（必須）',
-    'message' => 'お問い合わせ内容（必須）',
+    'company' => '会社名',
+    'name'    => 'お名前',
+    'email'   => 'メールアドレス',
+    'phone'   => '電話番号',
+    'message' => 'お問い合わせ内容',
   ];
 
   if ($form_post_id <= 0) {
@@ -1185,8 +1262,37 @@ function chatease_get_form_labels(int $form_post_id): array
     'company' => $company !== '' ? $company : $defaults['company'],
     'name'    => $name    !== '' ? $name    : $defaults['name'],
     'email'   => $email   !== '' ? $email   : $defaults['email'],
+    'phone'   => $defaults['phone'],
     'message' => $message !== '' ? $message : $defaults['message'],
   ];
+}
+
+/**
+ * フォームごとの電話番号欄表示可否を取得する。
+ */
+function chatease_should_use_phone_field(int $form_post_id): bool
+{
+  if ($form_post_id > 0 && get_post_type($form_post_id) === 'chatease_form') {
+    return (string) get_post_meta($form_post_id, '_chatease_use_phone', true) === '1';
+  }
+
+  return false;
+}
+
+/**
+ * フォームごとの電話番号欄必須可否を取得する。
+ */
+function chatease_is_phone_field_required(int $form_post_id): bool
+{
+  if (!chatease_should_use_phone_field($form_post_id)) {
+    return false;
+  }
+
+  if ($form_post_id > 0 && get_post_type($form_post_id) === 'chatease_form') {
+    return (string) get_post_meta($form_post_id, '_chatease_require_phone', true) === '1';
+  }
+
+  return false;
 }
 
 /**
