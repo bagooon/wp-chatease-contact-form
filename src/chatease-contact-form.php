@@ -18,7 +18,7 @@ if (file_exists(__DIR__ . '/vendor/autoload.php')) {
 use Bagooon\ChatEase\ChatEaseClient;
 
 const CHATEASE_PLUGIN_STYLE_HANDLE = 'chatease-contact-form';
-const CHATEASE_PLUGIN_STYLE_VERSION = '0.4.0';
+const CHATEASE_PLUGIN_STYLE_VERSION = '0.3.0';
 const CHATEASE_DEFAULT_BOARD_TITLE = 'フォームからのお問い合わせ';
 
 /*
