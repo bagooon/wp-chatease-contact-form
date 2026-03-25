@@ -2,7 +2,7 @@
 /*
 Plugin Name: ChatEase Contact Form
 Description: ChatEase 連携用の確認画面付き問い合わせフォーム（reCAPTCHA v2 対応・セッション方式）
-Version: 0.3.0
+Version: 1.0.0
 Author: Hashimoto Giken
 */
 
@@ -536,7 +536,7 @@ function chatease_render_input_form(string $form_id, array $values, array $label
     <div class="chatease-intro">
       <p>
         個別にチャットにてご返答させていただきます。準備が整いましたらチャットボードへのアクセス方法をメールにてお知らせいたします。<br />
-        メールの件名は 『 チャットボード通知【 <?php echo esc_html($workspace_name); ?> 】 』です。
+        メールの件名は 『 【 <?php echo esc_html($workspace_name); ?> 】チャットボード更新のお知らせ 』です。
       </p>
     </div>
   <?php else: ?>
