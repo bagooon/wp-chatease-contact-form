@@ -2,7 +2,7 @@
 /*
 Plugin Name: ChatEase Contact Form
 Description: ChatEase 連携用の確認画面付き問い合わせフォーム（reCAPTCHA v2 対応・セッション方式）
-Version: 1.0.0
+Version: 1.1.0
 Author: Hashimoto Giken
 */
 
@@ -188,6 +188,7 @@ add_action('save_post_chatease_form', function ($post_id) {
     'chatease_label_email'        => '_chatease_label_email',
     'chatease_label_message'      => '_chatease_label_message',
     'chatease_board_title'        => '_chatease_board_title',
+    'chatease_guest_passphrase'   => '_chatease_guest_passphrase',
     'chatease_deadline_days'      => '_chatease_deadline_days',
     'chatease_form_notify_email'  => '_chatease_notify_email',
     'chatease_form_api_token'     => '_chatease_api_token',
@@ -945,7 +946,7 @@ function chatease_send_to_chatease(array $values, int $form_post_id = 0): string
 
     $uniqueKey = sprintf('wp-%s-%s', $now->format('Ymd-His'), wp_generate_password(8, false));
 
-    $client->createBoardWithStatusAndMessage([
+    $payload = [
       'title' => chatease_get_board_title($form_post_id),
       'guest' => [
         'name'  => $guestName,
@@ -960,7 +961,14 @@ function chatease_send_to_chatease(array $values, int $form_post_id = 0): string
       'initialGuestComment' => [
         'content' => $initialContent,
       ],
-    ]);
+    ];
+
+    $guest_passphrase = chatease_get_guest_passphrase($form_post_id);
+    if ($guest_passphrase !== '') {
+      $payload['guestPassphrase'] = $guest_passphrase;
+    }
+
+    $client->createBoardWithStatusAndMessage($payload);
   } catch (\Throwable $e) {
     return $e->getMessage();
   }
@@ -1015,6 +1023,7 @@ function chatease_render_form_labels_metabox(WP_Post $post)
   $form_workspace_name = get_post_meta($post->ID, '_chatease_workspace_name', true);
   $use_plugin_style    = get_post_meta($post->ID, '_chatease_use_plugin_style', true);
   $board_title         = trim((string) get_post_meta($post->ID, '_chatease_board_title', true));
+  $guest_passphrase    = trim((string) get_post_meta($post->ID, '_chatease_guest_passphrase', true));
 
   // デフォルト値
   if ($label_company === '') $label_company = '会社名';
@@ -1151,6 +1160,19 @@ function chatease_render_form_labels_metabox(WP_Post $post)
           class="regular-text" />
         <p class="description">
           送信時に作成されるチャットボードのタイトルです。未設定時は「<?php echo esc_html(CHATEASE_DEFAULT_BOARD_TITLE); ?>」が使われます。
+        </p>
+      </td>
+    </tr>
+    <tr>
+      <th><label for="chatease_guest_passphrase">合言葉</label></th>
+      <td>
+        <input type="text"
+          id="chatease_guest_passphrase"
+          name="chatease_guest_passphrase"
+          value="<?php echo esc_attr($guest_passphrase); ?>"
+          class="regular-text" />
+        <p class="description">
+          このフォームから作成されるチャットボードに設定する合言葉です。空欄の場合は合言葉を使用しません。全角換算 10 文字以内で入力してください。
         </p>
       </td>
     </tr>
@@ -1383,6 +1405,18 @@ function chatease_get_board_title(int $form_post_id): string
   }
 
   return CHATEASE_DEFAULT_BOARD_TITLE;
+}
+
+/**
+ * フォームごとの合言葉を取得する。未設定時は空文字を返す。
+ */
+function chatease_get_guest_passphrase(int $form_post_id): string
+{
+  if ($form_post_id > 0 && get_post_type($form_post_id) === 'chatease_form') {
+    return trim((string) get_post_meta($form_post_id, '_chatease_guest_passphrase', true));
+  }
+
+  return '';
 }
 
 /**
