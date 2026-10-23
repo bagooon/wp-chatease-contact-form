@@ -1,8 +1,8 @@
 <?php
 /*
 Plugin Name: ChatEase Contact Form
-Description: ChatEase 連携用の確認画面付き問い合わせフォーム（reCAPTCHA v2 対応・セッション方式）
-Version: 1.1.0
+Description: ChatEase 連携用の確認画面付き問い合わせフォーム（Cloudflare Turnstile / reCAPTCHA v2 対応・セッション方式）
+Version: 1.2.0
 Author: Hashimoto Giken
 */
 
@@ -27,7 +27,7 @@ const CHATEASE_DEFAULT_BOARD_TITLE = 'フォームからのお問い合わせ';
  * 2) Front Flow: chatease_render_contact_form -> input -> confirm -> complete
  * 3) Validation: chatease_validate_workspace_settings, chatease_validate_form_workspace_settings
  * 4) Integration: chatease_send_to_chatease, chatease_send_notify_email
- * 5) Accessors/Utilities: chatease_get_*, sanitize helpers, reCAPTCHA verifier
+ * 5) Accessors/Utilities: chatease_get_*, sanitize helpers, CAPTCHA verifiers
  */
 
 /**
@@ -85,7 +85,7 @@ add_action('admin_enqueue_scripts', function () {
 });
 
 /**
- * reCAPTCHA スクリプト読み込み
+ * CAPTCHA スクリプト読み込み
  */
 add_action('wp_enqueue_scripts', function () {
   wp_register_style(
@@ -95,8 +95,17 @@ add_action('wp_enqueue_scripts', function () {
     CHATEASE_PLUGIN_STYLE_VERSION
   );
 
-  $site_key = get_option('chatease_recaptcha_site_key', '');
-  if ($site_key !== '') {
+  $captcha_provider = chatease_get_captcha_provider();
+
+  if ($captcha_provider === 'turnstile') {
+    wp_enqueue_script(
+      'chatease-turnstile',
+      'https://challenges.cloudflare.com/turnstile/v0/api.js',
+      [],
+      null,
+      true
+    );
+  } elseif ($captcha_provider === 'recaptcha') {
     wp_enqueue_script(
       'chatease-recaptcha',
       'https://www.google.com/recaptcha/api.js',
@@ -113,6 +122,8 @@ add_action('wp_enqueue_scripts', function () {
 add_action('admin_init', function () {
   register_setting('chatease_contact_form', 'chatease_api_token');
   register_setting('chatease_contact_form', 'chatease_workspace_slug');
+  register_setting('chatease_contact_form', 'chatease_turnstile_site_key');
+  register_setting('chatease_contact_form', 'chatease_turnstile_secret_key');
   register_setting('chatease_contact_form', 'chatease_recaptcha_site_key');
   register_setting('chatease_contact_form', 'chatease_recaptcha_secret_key');
   register_setting('chatease_contact_form', 'chatease_notify_email');
@@ -355,6 +366,25 @@ function chatease_render_settings_page()
           </td>
         </tr>
         <tr>
+          <th scope="row"><label for="chatease_turnstile_site_key">Cloudflare Turnstile Site Key</label></th>
+          <td>
+            <input type="text" id="chatease_turnstile_site_key" name="chatease_turnstile_site_key"
+              value="<?php echo esc_attr(get_option('chatease_turnstile_site_key', '')); ?>"
+              class="regular-text" />
+          </td>
+        </tr>
+        <tr>
+          <th scope="row"><label for="chatease_turnstile_secret_key">Cloudflare Turnstile Secret Key</label></th>
+          <td>
+            <input type="text" id="chatease_turnstile_secret_key" name="chatease_turnstile_secret_key"
+              value="<?php echo esc_attr(get_option('chatease_turnstile_secret_key', '')); ?>"
+              class="regular-text" />
+            <p class="description">
+              Turnstile と reCAPTCHA の両方が設定されている場合は、Turnstile が優先されます。
+            </p>
+          </td>
+        </tr>
+        <tr>
           <th scope="row"><label for="chatease_recaptcha_site_key">reCAPTCHA v2 Site Key</label></th>
           <td>
             <input type="text" id="chatease_recaptcha_site_key" name="chatease_recaptcha_site_key"
@@ -443,10 +473,12 @@ function chatease_render_contact_form($atts)
         $stored['phone']   = isset($_POST['cf_phone']) ? chatease_sanitize_text($_POST['cf_phone']) : '';
         $stored['message'] = isset($_POST['cf_message']) ? chatease_sanitize_textarea($_POST['cf_message']) : '';
 
-        // reCAPTCHA 検証
-        $recaptcha_ok = chatease_verify_recaptcha();
-        if (!$recaptcha_ok) {
-          $errors[] = 'reCAPTCHA の認証に失敗しました。もう一度お試しください。';
+        // CAPTCHA 検証（Turnstile を優先）
+        $captcha_provider = chatease_get_captcha_provider();
+        $captcha_ok = chatease_verify_captcha();
+        if (!$captcha_ok) {
+          $captcha_name = $captcha_provider === 'turnstile' ? 'Cloudflare Turnstile' : 'reCAPTCHA';
+          $errors[] = $captcha_name . ' の認証に失敗しました。もう一度お試しください。';
         }
 
         // 必須チェック
@@ -523,7 +555,10 @@ function chatease_render_contact_form($atts)
  */
 function chatease_render_input_form(string $form_id, array $values, array $labels): void
 {
-  $site_key = get_option('chatease_recaptcha_site_key', '');
+  $captcha_provider = chatease_get_captcha_provider();
+  $captcha_site_key = $captcha_provider === 'turnstile'
+    ? trim((string) get_option('chatease_turnstile_site_key', ''))
+    : trim((string) get_option('chatease_recaptcha_site_key', ''));
   $form_post_id = chatease_extract_form_post_id_from_form_id($form_id);
   $use_phone_field = chatease_should_use_phone_field($form_post_id);
   $is_phone_required = chatease_is_phone_field_required($form_post_id);
@@ -606,8 +641,10 @@ function chatease_render_input_form(string $form_id, array $values, array $label
       </div>
     </div>
 
-    <?php if ($site_key !== ''): ?>
-      <div class="g-recaptcha" data-sitekey="<?php echo esc_attr($site_key); ?>"></div>
+    <?php if ($captcha_provider === 'turnstile'): ?>
+      <div class="cf-turnstile" data-sitekey="<?php echo esc_attr($captcha_site_key); ?>"></div>
+    <?php elseif ($captcha_provider === 'recaptcha'): ?>
+      <div class="g-recaptcha" data-sitekey="<?php echo esc_attr($captcha_site_key); ?>"></div>
     <?php endif; ?>
 
     <div class="chatease-form-buttons">
@@ -710,25 +747,93 @@ function chatease_sanitize_textarea($value): string
 }
 
 /**
+ * 有効な CAPTCHA を取得する。
+ * Turnstile と reCAPTCHA の両方が設定されている場合は Turnstile を優先する。
+ */
+function chatease_get_captcha_provider(): string
+{
+  $turnstile_site_key   = trim((string) get_option('chatease_turnstile_site_key', ''));
+  $turnstile_secret_key = trim((string) get_option('chatease_turnstile_secret_key', ''));
+
+  if ($turnstile_site_key !== '' && $turnstile_secret_key !== '') {
+    return 'turnstile';
+  }
+
+  $recaptcha_site_key   = trim((string) get_option('chatease_recaptcha_site_key', ''));
+  $recaptcha_secret_key = trim((string) get_option('chatease_recaptcha_secret_key', ''));
+
+  if ($recaptcha_site_key !== '' && $recaptcha_secret_key !== '') {
+    return 'recaptcha';
+  }
+
+  return '';
+}
+
+/**
+ * 設定されている CAPTCHA を検証する。
+ */
+function chatease_verify_captcha(): bool
+{
+  $captcha_provider = chatease_get_captcha_provider();
+
+  if ($captcha_provider === 'turnstile') {
+    return chatease_verify_turnstile();
+  }
+
+  if ($captcha_provider === 'recaptcha') {
+    return chatease_verify_recaptcha();
+  }
+
+  return true;
+}
+
+/**
+ * Cloudflare Turnstile の検証
+ */
+function chatease_verify_turnstile(): bool
+{
+  $secret_key = trim((string) get_option('chatease_turnstile_secret_key', ''));
+  $response_token = isset($_POST['cf-turnstile-response']) ? sanitize_text_field(wp_unslash($_POST['cf-turnstile-response'])) : '';
+
+  if ($secret_key === '' || $response_token === '') {
+    return false;
+  }
+
+  $remote_ip = isset($_SERVER['REMOTE_ADDR']) ? sanitize_text_field(wp_unslash($_SERVER['REMOTE_ADDR'])) : '';
+
+  $response = wp_remote_post('https://challenges.cloudflare.com/turnstile/v0/siteverify', [
+    'body' => [
+      'secret'   => $secret_key,
+      'response' => $response_token,
+      'remoteip' => $remote_ip,
+    ],
+    'timeout' => 10,
+  ]);
+
+  if (is_wp_error($response)) {
+    return false;
+  }
+
+  $body = wp_remote_retrieve_body($response);
+  $data = json_decode($body, true);
+
+  return is_array($data) && !empty($data['success']);
+}
+
+/**
  * reCAPTCHA v2 の検証
  */
 function chatease_verify_recaptcha(): bool
 {
-  $site_key   = get_option('chatease_recaptcha_site_key', '');
-  $secret_key = get_option('chatease_recaptcha_secret_key', '');
-
-  // 設定されていない場合はスキップ（本番では必須にしても良い）
-  if ($site_key === '' || $secret_key === '') {
-    return true;
-  }
+  $secret_key = trim((string) get_option('chatease_recaptcha_secret_key', ''));
 
   $response_token = isset($_POST['g-recaptcha-response']) ? sanitize_text_field(wp_unslash($_POST['g-recaptcha-response'])) : '';
 
-  if ($response_token === '') {
+  if ($secret_key === '' || $response_token === '') {
     return false;
   }
 
-  $remote_ip = $_SERVER['REMOTE_ADDR'] ?? '';
+  $remote_ip = isset($_SERVER['REMOTE_ADDR']) ? sanitize_text_field(wp_unslash($_SERVER['REMOTE_ADDR'])) : '';
 
   $response = wp_remote_post('https://www.google.com/recaptcha/api/siteverify', [
     'body' => [

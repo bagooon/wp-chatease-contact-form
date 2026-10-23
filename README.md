@@ -7,7 +7,7 @@ ChatEase のチャットボードと連携できる、WordPress 用お問い合�
 - フロント：
   - 会社名 / お名前 / メールアドレス / 電話番号 / お問い合わせ内容 のシンプルなフォーム
   - 入力 → 確認 → 完了 の 3 ステップ
-  - reCAPTCHA v2（チェックボックス）対応
+  - Cloudflare Turnstile / reCAPTCHA v2（チェックボックス）対応
   - フォームごとにプラグイン同梱CSSの適用 ON/OFF が可能
 - バックエンド：
   - ChatEase API を使ってチャットボードを自動生成
@@ -27,7 +27,7 @@ ChatEase のチャットボードと連携できる、WordPress 用お問い合�
 - PHP 8.1 以上
 - WordPress 6.x 目安
 - ChatEase ワークスペース（API トークン・ワークスペーススラッグ）
-- reCAPTCHA v2（チェックボックス）の Site Key / Secret Key
+- Cloudflare Turnstile または reCAPTCHA v2（チェックボックス）の Site Key / Secret Key
 
 ---
 
@@ -50,6 +50,8 @@ ChatEase のチャットボードと連携できる、WordPress 用お問い合�
 - ワークスペーススラッグ
 - 返答期限（日数）
 - 通知先メールアドレス
+- Cloudflare Turnstile Site Key
+- Cloudflare Turnstile Secret Key
 - reCAPTCHA v2 Site Key
 - reCAPTCHA v2 Secret Key
 
@@ -114,14 +116,15 @@ ChatEase のチャットボードと連携できる、WordPress 用お問い合�
 
 ---
 
-## reCAPTCHA について
+## スパム対策について
 
-このプラグインは reCAPTCHA v2（チェックボックス） に対応しています。
+このプラグインは Cloudflare Turnstile と reCAPTCHA v2（チェックボックス）に対応しています。
 
-- Site Key / Secret Key を設定すると、フォームに reCAPTCHA ウィジェットが表示されます
-- 送信時に g-recaptcha-response を検証し、失敗した場合は送信を拒否します
+- Site Key / Secret Key の両方を設定すると、フォームに対応するウィジェットが表示されます
+- Turnstile と reCAPTCHA の両方を設定した場合は、Turnstile が優先されます
+- 送信時に選択されたサービスのレスポンストークンを検証し、失敗した場合は送信を拒否します
 
-スパムが多いサイトでは、reCAPTCHA の設定を強く推奨します。
+スパムが多いサイトでは、いずれかのサービスの設定を強く推奨します。
 
 ---
 
