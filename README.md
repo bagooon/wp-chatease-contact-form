@@ -128,6 +128,18 @@ ChatEase のチャットボードと連携できる、WordPress 用お問い合�
 
 ---
 
+## セッションとサイトヘルス
+
+- 管理画面、REST API、Ajax、Cronでは、このプラグインによるPHPセッションを開始しません。
+- 公開ページでは、正しいnonceを持つフォームPOST、または既存のセッションCookieがある場合だけセッションを利用します。初回のフォーム表示ではセッションCookieを発行しません。
+- POST処理は画面出力前に行い、入力の保存・取得後にセッションを閉じます。CAPTCHA検証、ChatEase API通信、通知メール送信、フォーム描画中には、このプラグインのセッションロックを保持しません。
+- 確認済み入力は送信前に取り出して、同時送信での重複利用を防ぎます。APIエラー時は入力を復元します。処理中断・タイムアウトなどで復元できない場合は再入力が必要です。
+- 他のプラグインが開始したセッションは終了しません。他の要因によるサイトヘルス異常は別途確認が必要です。
+
+更新後はWordPress管理画面の「ツール → サイトヘルス」でPHPセッション、REST API、ループバックリクエストを再確認してください。
+
+---
+
 ## 今後の拡張予定
 
 - 任意項目の追加と、ChatEase 側へのメモ情報としての連携
@@ -146,10 +158,20 @@ MIT
 ローカルで ZIP を作成する場合：
 
 ```bash
-npm install
+npm ci
 npm run build:zip
 ```
 
 `dist/chatease-contact-form.zip` が作成されます。
 
 GitHub Actions での ZIP 自動生成は `.github/workflows/build-zip.yml` を参照してください。
+
+
+PHPの回帰テスト（WordPressと外部通信はテスト用の代替実装を使用）：
+
+```bash
+docker run --rm --network none --read-only --tmpfs /tmp \
+  -v "$PWD:/app:ro" -w /app php:8.1-cli php tests/session-regression.php
+```
+
+管理画面・REST・Ajax・Cronのセッション非開始、入力→確認→戻る→送信、期限切れ、CAPTCHA、通信失敗後の復元、同時送信、テーマ出力後の描画を確認します。実際のWordPress環境でのサイトヘルスとフォーム送信の確認は別途行ってください。

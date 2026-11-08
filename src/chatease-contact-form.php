@@ -2,7 +2,7 @@
 /*
 Plugin Name: ChatEase Contact Form
 Description: ChatEase 連携用の確認画面付き問い合わせフォーム（Cloudflare Turnstile / reCAPTCHA v2 対応・セッション方式）
-Version: 1.2.0
+Version: 1.2.1
 Author: Hashimoto Giken
 */
 
@@ -31,13 +31,9 @@ const CHATEASE_DEFAULT_BOARD_TITLE = 'フォームからのお問い合わせ';
  */
 
 /**
- * フロント側でセッションを開始
+ * フォーム用の投稿タイプを登録
  */
 add_action('init', function () {
-  if (session_status() === PHP_SESSION_NONE) {
-    session_start();
-  }
-
   $labels = [
     'name'               => 'ChatEase フォーム',
     'singular_name'      => 'ChatEase フォーム',
@@ -420,6 +416,88 @@ function chatease_render_settings_page()
 add_shortcode('chatease_contact_form', 'chatease_render_contact_form');
 
 /**
+ * Cookie発行とフォームPOST処理は画面出力前に行う。
+ * 管理画面・REST APIではセッションを開始しない。
+ */
+add_action('template_redirect', 'chatease_prepare_form_request');
+
+function chatease_prepare_form_request(): void
+{
+  if (is_admin() || wp_doing_ajax() || wp_doing_cron() || (defined('REST_REQUEST') && REST_REQUEST)) {
+    return;
+  }
+
+  $is_form_post = ($_SERVER['REQUEST_METHOD'] ?? '') === 'POST'
+    && isset($_POST['chatease_form_post_id'], $_POST['chatease_step'], $_POST['_chatease_nonce'])
+    && is_scalar($_POST['chatease_form_post_id'])
+    && is_string($_POST['chatease_step'])
+    && is_string($_POST['_chatease_nonce'])
+    && in_array($_POST['chatease_step'], ['input', 'confirm', 'submit'], true);
+
+  $post_id = $is_form_post ? max(0, (int) $_POST['chatease_form_post_id']) : 0;
+  $form_id = $post_id > 0 ? 'form_' . $post_id : 'default';
+  $valid_post = $is_form_post
+    && wp_verify_nonce($_POST['_chatease_nonce'], 'chatease_contact_form_' . $form_id);
+
+  // 初回のGETや無関係なPOSTでは新しいセッションを作らない。
+  if ($valid_post || !empty($_COOKIE[session_name()])) {
+    $values = chatease_with_form_session(static function () {
+      return array_filter($_SESSION, static function ($key) {
+        return strpos((string) $key, 'chatease_form_') === 0;
+      }, ARRAY_FILTER_USE_KEY);
+    }, true);
+    $GLOBALS['chatease_form_values'] = is_array($values) ? $values : [];
+  }
+
+  if ($is_form_post) {
+    $GLOBALS['chatease_form_states'][$form_id] = chatease_process_form_request($post_id);
+  }
+}
+
+/**
+ * セッションの読み書き中だけロックする。HTTP通信や描画はコールバックに含めない。
+ * 他プラグインが開始したセッションの終了や設定変更は行わない。
+ *
+ * @return mixed コールバックの戻り値。準備・開始できなかった場合はfalse。
+ */
+function chatease_with_form_session(callable $callback, bool $initialize = false): mixed
+{
+  static $prepared = false;
+
+  if ((!$initialize && !$prepared) || session_status() === PHP_SESSION_DISABLED) {
+    return false;
+  }
+
+  $owns_session = session_status() !== PHP_SESSION_ACTIVE;
+  if ($owns_session && (headers_sent() || !session_start())) {
+    return false;
+  }
+
+  $prepared = true;
+  try {
+    return $callback();
+  } finally {
+    if ($owns_session) {
+      session_write_close();
+    }
+  }
+}
+
+/**
+ * 保存済み入力をリクエスト内のスナップショットから取得する。
+ */
+function chatease_get_stored_form_values(string $form_id): array
+{
+  return $GLOBALS['chatease_form_values']['chatease_form_' . $form_id] ?? [
+    'company' => '',
+    'name'    => '',
+    'email'   => '',
+    'phone'   => '',
+    'message' => '',
+  ];
+}
+
+/**
  * フォーム表示・確認・送信処理本体
  */
 function chatease_render_contact_form($atts)
@@ -431,7 +509,10 @@ function chatease_render_contact_form($atts)
   $form_post_id = $atts['id'] !== '' ? (int)$atts['id'] : 0;
 
   // POST のときは hidden から上書き（ショートコードとズレないように）
-  if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['chatease_form_post_id'])) {
+  if (($_SERVER['REQUEST_METHOD'] ?? '') === 'POST'
+    && isset($_POST['chatease_form_post_id'])
+    && is_scalar($_POST['chatease_form_post_id'])
+  ) {
     $posted_id = (int) $_POST['chatease_form_post_id'];
     if ($posted_id > 0) {
       $form_post_id = $posted_id;
@@ -443,18 +524,45 @@ function chatease_render_contact_form($atts)
   }
 
   $form_id = $form_post_id > 0 ? 'form_' . $form_post_id : 'default';
-  $session_key = 'chatease_form_' . $form_id;
-
   $labels = chatease_get_form_labels($form_post_id);
-
-  // セッションから前回値を取得
-  $stored = $_SESSION[$session_key] ?? [
-    'company' => '',
-    'name'    => '',
-    'email'   => '',
-    'phone'   => '',
-    'message' => '',
+  $state = $GLOBALS['chatease_form_states'][$form_id] ?? [
+    'stored' => chatease_get_stored_form_values($form_id),
+    'step' => 'input',
+    'errors' => [],
   ];
+  $stored = $state['stored'];
+  $step = $state['step'];
+  $errors = $state['errors'];
+
+  ob_start();
+
+  if (!empty($errors)) {
+    echo '<div class="chatease-errors"><ul>';
+    foreach ($errors as $error) {
+      echo '<li>' . esc_html($error) . '</li>';
+    }
+    echo '</ul></div>';
+  }
+
+  if ($step === 'input') {
+    chatease_render_input_form($form_id, $stored, $labels);
+  } elseif ($step === 'confirm') {
+    chatease_render_confirm_screen($form_id, $stored, $labels);
+  } elseif ($step === 'complete') {
+    chatease_render_complete_screen();
+  }
+
+  return ob_get_clean();
+}
+
+/**
+ * 入力検証・確認・送信。template_redirectから一度だけ実行する。
+ */
+function chatease_process_form_request(int $form_post_id): array
+{
+  $form_id = $form_post_id > 0 ? 'form_' . $form_post_id : 'default';
+  $session_key = 'chatease_form_' . $form_id;
+  $stored = chatease_get_stored_form_values($form_id);
 
   $step   = isset($_POST['chatease_step']) ? sanitize_text_field(wp_unslash($_POST['chatease_step'])) : 'input';
   $errors = [];
@@ -499,29 +607,46 @@ function chatease_render_contact_form($atts)
           $step = 'input';
         } else {
           // 問題なければセッションに保存して確認画面へ
-          $_SESSION[$session_key] = $stored;
-          $step = 'confirm';
+          $saved = chatease_with_form_session(static function () use ($session_key, $stored) {
+            $_SESSION[$session_key] = $stored;
+            return true;
+          });
+          if ($saved === false) {
+            $errors[] = '入力内容を保存できませんでした。もう一度お試しください。';
+            $step = 'input';
+          } else {
+            $step = 'confirm';
+          }
         }
       } elseif ($step === 'submit') {
-        // セッションに値がある前提で送信処理
-        if (!isset($_SESSION[$session_key])) {
+        // 通信前に入力を取り出してロックを解放する。同時送信では一度だけ取得できる。
+        $submission = chatease_with_form_session(static function () use ($session_key) {
+          $values = $_SESSION[$session_key] ?? null;
+          unset($_SESSION[$session_key]);
+          return $values;
+        });
+        if (!is_array($submission)) {
           $errors[] = 'セッションが切れました。もう一度入力してください。';
           $step = 'input';
         } else {
-          $stored = $_SESSION[$session_key];
+          $stored = $submission;
 
           // ここで ChatEase に連携（SDK 呼び出し）
           $chatease_error = chatease_send_to_chatease($stored, $form_post_id);
 
           if ($chatease_error !== '') {
+            // 失敗時は再入力・再確認に使えるよう復元する。新しい確認内容は上書きしない。
+            chatease_with_form_session(static function () use ($session_key, $stored) {
+              if (!isset($_SESSION[$session_key])) {
+                $_SESSION[$session_key] = $stored;
+              }
+            });
             $errors[] = 'チャットボード連携中にエラーが発生しました: ' . esc_html($chatease_error);
             $step = 'input';
           } else {
             // 管理者にメール送信
             chatease_send_notify_email($stored, $form_post_id);
 
-            // セッションをクリア
-            unset($_SESSION[$session_key]);
             $step = 'complete';
           }
         }
@@ -529,25 +654,7 @@ function chatease_render_contact_form($atts)
     }
   }
 
-  ob_start();
-
-  if (!empty($errors)) {
-    echo '<div class="chatease-errors"><ul>';
-    foreach ($errors as $error) {
-      echo '<li>' . esc_html($error) . '</li>';
-    }
-    echo '</ul></div>';
-  }
-
-  if ($step === 'input') {
-    chatease_render_input_form($form_id, $stored, $labels);
-  } elseif ($step === 'confirm') {
-    chatease_render_confirm_screen($form_id, $stored, $labels);
-  } elseif ($step === 'complete') {
-    chatease_render_complete_screen();
-  }
-
-  return ob_get_clean();
+  return ['stored' => $stored, 'step' => $step, 'errors' => $errors];
 }
 
 /**
